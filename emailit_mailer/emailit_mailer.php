@@ -32,21 +32,34 @@ class EmailItMailer {
         add_action('emailit_send_mail_async', [$this, 'send_mail_async']);
         
         add_action('emailit_process_email_batch', [$this, 'process_email_batch']);
+        
+        add_filter('cron_schedules', [$this, 'add_cron_interval']);
     }
     
-    public function process_email_batch($args) {
-        $data = $args;
-    
-        foreach($data['batch'] as $recipient) {
-            $this->send_mail_async([
-                'to' => $recipient,
-                'subject' => $data['subject'],
-                'message' => $data['message'],
-                'headers' => $data['headers'],
-                'text_message' => $data['text_message']
-            ]);
-        }
+    public function add_cron_interval($schedules) {
+        $schedules['emailit_every_minute'] = array(
+            'interval' => 60, // 60 seconds = 1 minute
+            'display'  => 'Every Minute'
+        );
+        return $schedules;
     }
+    
+   public function process_email_batch($args) {
+       // $args is already the array containing batch, subject, etc.
+       // no need to do $data = $args[0]
+       foreach($args['batch'] as $recipient) {
+           $this->send_mail_async([
+               'to' => $recipient,
+               'subject' => $args['subject'],
+               'message' => $args['message'],
+               'headers' => $args['headers'],
+               'text_message' => $args['text_message']
+           ]);
+       }
+       
+       // Pass the exact same args structure to clear the hook
+       wp_clear_scheduled_hook('emailit_process_email_batch', [$args]);
+   }
     
     public function send_mail_async($args) {
         try {
@@ -265,21 +278,22 @@ class EmailItMailer {
        $batches = array_chunk($recipients, $batch_size);
        
        foreach($batches as $index => $batch) {
-           wp_schedule_single_event(
-                time() + ($index * 60),
-                'emailit_process_email_batch',
-                [[ 
-                    'batch' => $batch,
-                    'subject' => '[' . wp_specialchars_decode(get_option('blogname'), ENT_QUOTES) . '] ' . $topic_title,
-                    'message' => $html_message,
-                    'headers' => array(
-                        'Content-Type: text/html; charset=UTF-8',
-                        'X-bbPress: ' . bbp_get_version(),
-                        'From: Logical Investor <noreply@logicalinvestor.net>'
-                    ),
-                    'text_message' => $text_message
-                ]]
-            );
+           wp_schedule_event(
+               time() + ($index * 60),
+               'emailit_every_minute',
+               'emailit_process_email_batch',
+               [[
+                   'batch' => $batch,
+                   'subject' => '[' . wp_specialchars_decode(get_option('blogname'), ENT_QUOTES) . '] ' . $topic_title,
+                   'message' => $html_message,
+                   'headers' => array(
+                       'Content-Type: text/html; charset=UTF-8',
+                       'X-bbPress: ' . bbp_get_version(),
+                       'From: Logical Investor <noreply@logicalinvestor.net>'
+                   ),
+                   'text_message' => $text_message
+               ]]
+           );
        }
        
        return true;
