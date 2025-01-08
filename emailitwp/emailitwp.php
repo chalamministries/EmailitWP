@@ -341,7 +341,7 @@ function emailit_send_email( $phpmailer ) {
         $phpmailer->ClearAttachments();
     }
 }
-add_action( 'phpmailer_init', 'emailit_send_email' );
+add_action( 'phpmailer_init', 'emailit_send_email', 1 );
 
 /**
  * Set From Name and Email.
