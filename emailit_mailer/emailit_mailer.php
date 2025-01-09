@@ -3,7 +3,7 @@
 Plugin Name: EmailIt Mailer for WordPress
 Plugin URI: 
 Description: Overrides WordPress default mail function to use EmailIt SDK
-Version: 1.3
+Version: 1.5
 Author: Steven Gauerke
 License: GPL2
 */
@@ -21,284 +21,9 @@ class EmailItMailer {
     private static $instance = null;
     private $options;
     private $option_name = 'emailit_settings';
+    private static $api_active = false;
+    private $sending_domains_option = 'emailit_sending_domains';
     
-    public function init() {
-        // Remove bbPress's default notification function
-        remove_action('bbp_new_reply', 'bbp_notify_topic_subscribers', 11);
-        
-        // Add our custom notification handler
-        add_action('bbp_new_reply', [$this, 'custom_bbp_notify_topic_subscribers'], 11, 5);
-        
-        add_action('emailit_send_mail_async', [$this, 'send_mail_async']);
-        
-        add_action('emailit_process_email_batch', [$this, 'process_email_batch']);
-        
-        add_filter('cron_schedules', [$this, 'add_cron_interval']);
-    }
-    
-    public function add_cron_interval($schedules) {
-        $schedules['emailit_every_minute'] = array(
-            'interval' => 60, // 60 seconds = 1 minute
-            'display'  => 'Every Minute'
-        );
-        return $schedules;
-    }
-    
-   public function process_email_batch($args) {
-       // $args is already the array containing batch, subject, etc.
-       // no need to do $data = $args[0]
-       foreach($args['batch'] as $recipient) {
-           $this->send_mail_async([
-               'to' => $recipient,
-               'subject' => $args['subject'],
-               'message' => $args['message'],
-               'headers' => $args['headers'],
-               'text_message' => $args['text_message']
-           ]);
-       }
-       
-       // Pass the exact same args structure to clear the hook
-       wp_clear_scheduled_hook('emailit_process_email_batch', [$args]);
-   }
-    
-    public function send_mail_async($args) {
-        try {
-            // Get plugin settings
-            $settings = $this->get_settings();
-            
-            if (empty($settings['api_key'])) {
-                error_log('EmailIt API key not configured');
-                return false;
-            }
-    
-            // Initialize EmailIt client
-            $client = new EmailIt\EmailItClient($settings['api_key']);
-            $email = $client->email();
-    
-            // Set default sender from settings
-            $email->from($settings['from_email'])
-                  ->replyTo($settings['from_email']);
-            
-    
-            // Process headers
-            if (!empty($args['headers'])) {
-                $headers = is_array($args['headers']) ? $args['headers'] : explode("\n", str_replace("\r\n", "\n", $args['headers']));
-                
-                foreach ($headers as $header) {
-                    if (strpos($header, ':') !== false) {
-                        list($name, $value) = explode(':', $header, 2);
-                        $name = trim($name);
-                        $value = trim($value);
-                        
-                        switch (strtolower($name)) {
-                            case 'from':
-                                if (preg_match('/(.*)<(.+)>/', $value, $matches)) {
-                                    $from_name = trim($matches[1]);
-                                    $from_email = trim($matches[2]);
-                                    $email->from($from_email);
-                                } else {
-                                    $email->from($value);
-                                }
-                                break;
-                            case 'reply-to':
-                                $email->replyTo($value);
-                                break;
-                            default:
-                                $email->addHeader($name, $value);
-                        }
-                    }
-                }
-            }
-    
-            // Set subject
-            $email->subject($args['subject']);
-    
-            // Set message content - HTML and plain text
-            $email->html($args['message']);
-            if (isset($args['text_message'])) {
-                $email->text($args['text_message']);
-            } else {
-                $email->text(wp_strip_all_tags($args['message']));
-            }
-    
-            // Process attachments if they exist
-            if (!empty($args['attachments'])) {
-                $attachments = is_array($args['attachments']) ? $args['attachments'] : [$args['attachments']];
-                foreach ($attachments as $attachment) {
-                    if (file_exists($attachment)) {
-                        $content = file_get_contents($attachment);
-                        $filename = basename($attachment);
-                        $mime_type = mime_content_type($attachment);
-                        $email->addAttachment($filename, base64_encode($content), $mime_type);
-                    }
-                }
-            }
-    
-            // Process recipients
-            $to = $args['to'];
-            if (is_array($to)) {
-                // Send individual email to each recipient
-                foreach ($to as $recipient) {
-                    $email->to($recipient);
-                    $result = $email->send();
-                    
-                    if (defined('WP_DEBUG') && WP_DEBUG) {
-                        error_log('Email sent to: ' . $recipient);
-                    }
-                }
-            } else {
-                // Single recipient
-                $email->to($to);
-                $result = $email->send();
-                if (defined('WP_DEBUG') && WP_DEBUG) {
-                    error_log('Email sent to: ' . $to);
-                }
-            }
-            
-            if (defined('WP_DEBUG') && WP_DEBUG) {
-                error_log('Async email sent successfully via EmailIt SDK');
-            }
-    
-            return true;
-    
-        } catch (Exception $e) {
-            if (defined('WP_DEBUG') && WP_DEBUG) {
-                error_log('Async EmailIt SDK error: ' . $e->getMessage());
-            }
-            return false;
-        }
-    }
-    
-   public function custom_bbp_notify_topic_subscribers($reply_id = 0, $topic_id = 0, $forum_id = 0, $anonymous_data = false, $reply_author = 0) {
-       // Get subscriber IDs
-       $user_ids = bbp_get_topic_subscribers($topic_id, true);
-       
-       if (empty($user_ids)) {
-           return false;
-       }
-       
-       // Get reply author ID if not provided
-       if (!$reply_author) {
-           $reply_author = bbp_get_reply_author_id($reply_id);
-       }
-       
-       $recipients = [];
-       foreach ($user_ids as $user_id) {
-           if ($user_id != $reply_author) {
-               $user = get_userdata($user_id);
-               if (!empty($user->user_email)) {
-                   $recipients[] = $user->user_email;
-               }
-           }
-       }
-       
-       if (empty($recipients)) {
-           return false;
-       }
-       
-       // Get reply details
-       $reply_author_name = bbp_get_reply_author_display_name($reply_id);
-       $topic_title = bbp_get_topic_title($topic_id);
-       $reply_url = bbp_get_reply_url($reply_id);
-       $forum_id = bbp_get_topic_forum_id($topic_id);
-       $forum_title = bbp_get_forum_title($forum_id);
-       
-       $custom_logo_id = get_theme_mod('custom_logo');
-       $logo_url = '';
-       if ($custom_logo_id) {
-           $logo_url = wp_get_attachment_image_url($custom_logo_id, 'full');
-       }
-       
-       // Build HTML email
-       $html_message = '
-       <!DOCTYPE html>
-       <html>
-       <head>
-           <style>
-               body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
-               .container { max-width: 600px; margin: 20px auto; padding: 20px; }
-               .header img { max-height: 60px; width: auto; }
-               .header { border-bottom: 2px solid #15c182; padding-bottom: 10px; margin-bottom: 20px; }
-               ' . ($logo_url ? '' : '.header { text-align: center; font-size: 24px; font-weight: bold; }') . '
-               .forum-title { color: #666; font-size: 14px; margin-bottom: 10px; }
-               .topic-title { font-size: 20px; font-weight: bold; margin-bottom: 20px; color: #333; }
-               .reply-content { background: #f9f9f9; padding: 20px; border-left: 4px solid #15c182; margin-bottom: 20px; }
-               .author { color: #15c182; font-weight: bold; margin-bottom: 10px; }
-               .footer { border-top: 1px solid #eee; margin-top: 20px; padding-top: 20px; font-size: 12px; color: #666; }
-               .button { display: inline-block; padding: 10px 20px; background-color: #15c182; color: white; text-decoration: none; border-radius: 5px; margin-top: 15px; }
-           </style>
-       </head>
-       <body>
-           <div class="container">
-               <div class="header">
-                  ' . ($logo_url 
-                  ? '<img src="' . esc_url($logo_url) . '" alt="' . esc_attr(get_bloginfo('name')) . '" style="height: 60px;">'
-                  : esc_html(get_bloginfo('name'))) . '
-               </div>
-               <div class="forum-title">
-                   Forum: ' . esc_html($forum_title) . '
-               </div>
-               <div class="topic-title">
-                   ' . esc_html($topic_title) . '
-               </div>
-               <div class="reply-content">
-                   <div class="author">' . esc_html($reply_author_name) . ' wrote:</div>
-                   ' . wpautop(stripslashes(bbp_get_reply_content($reply_id))) . '
-               </div>
-               <a href="' . esc_url($reply_url) . '" class="button">View Post</a>
-               <div class="footer">
-                   <p>You are receiving this email because you subscribed to this forum topic.</p>
-                   <p>To unsubscribe from these notifications, visit the topic and click "Unsubscribe".</p>
-               </div>
-           </div>
-       </body>
-       </html>';
-   
-       // Create plain text version
-       $text_message = $reply_author_name . " wrote:\n\n";
-       $text_message .= wp_strip_all_tags(bbp_get_reply_content($reply_id)) . "\n\n";
-       $text_message .= "Forum: " . $forum_title . "\n";
-       $text_message .= "Topic: " . $topic_title . "\n";
-       $text_message .= "Post Link: " . $reply_url . "\n\n";
-       $text_message .= "-----------\n\n";
-       $text_message .= "You are receiving this email because you subscribed to this forum topic.\n";
-       $text_message .= "Login and visit the topic to unsubscribe from these emails.";
-       
-       // Headers
-       $headers = array(
-           'Content-Type: text/html; charset=UTF-8',
-           'X-bbPress: ' . bbp_get_version(),
-           'From: Logical Investor <noreply@logicalinvestor.net>'
-       );
-       
-       // Batch size - how many emails to process in each cron job
-       $batch_size = 10;
-       
-       // Split recipients into batches and schedule a job for each batch
-       $batches = array_chunk($recipients, $batch_size);
-       
-       foreach($batches as $index => $batch) {
-           wp_schedule_event(
-               time() + ($index * 60),
-               'emailit_every_minute',
-               'emailit_process_email_batch',
-               [[
-                   'batch' => $batch,
-                   'subject' => '[' . wp_specialchars_decode(get_option('blogname'), ENT_QUOTES) . '] ' . $topic_title,
-                   'message' => $html_message,
-                   'headers' => array(
-                       'Content-Type: text/html; charset=UTF-8',
-                       'X-bbPress: ' . bbp_get_version(),
-                       'From: Logical Investor <noreply@logicalinvestor.net>'
-                   ),
-                   'text_message' => $text_message
-               ]]
-           );
-       }
-       
-       return true;
-   }
-   
     public static function get_instance() {
         if (self::$instance === null) {
             self::$instance = new self();
@@ -308,16 +33,111 @@ class EmailItMailer {
 
     private function __construct() {
         // Initialize options
-        $this->options = get_option($this->option_name, [
-            'api_key' => '',
-            'from_email' => '',
-            'from_name' => ''
-        ]);
+       $this->options = get_option($this->option_name, [
+           'api_key' => '',
+           'from_email_prefix' => 'no-reply', // New default
+           'from_email_domain' => '', // Will be populated from sending domains
+           'from_name' => ''
+       ]);
 
         // Add admin menu
         add_action('admin_menu', [$this, 'add_admin_menu']);
         // Register settings
         add_action('admin_init', [$this, 'register_settings']);
+        // Add CSS for email input styling
+        add_action('admin_head', [$this, 'add_email_input_styles']);
+    }
+
+    public function init() {
+        // Test API connection on init
+        self::$api_active = $this->test_api_connection();
+        
+        // Add admin notice if API is not active
+        if (!self::$api_active) {
+            add_action('admin_notices', [$this, 'show_api_inactive_notice']);
+        }
+
+        add_action('emailit_send_mail_async', [$this, 'send_mail_async']);
+        add_action('emailit_process_email_batch', [$this, 'process_email_batch']);
+        add_filter('cron_schedules', [$this, 'add_cron_interval']);
+    }
+
+    // API Connection and Domain Management Methods
+    private function test_api_connection() {
+        if (empty($this->options['api_key'])) {
+            $this->clear_sending_domains();
+            return false;
+        }
+    
+        try {
+            $client = new EmailIt\EmailItClient($this->options['api_key']);
+            $response = $client->sendingDomains()->list(100, 1);
+            
+            if (isset($response['data']) && is_array($response['data'])) {
+                $domains = array_map(function($domain) {
+                    return $domain['name'];
+                }, $response['data']);
+                
+                $this->update_sending_domains($domains);
+                
+                // If we don't have a domain selected yet, set the first one as default
+                if (empty($this->options['from_email_domain']) && !empty($domains)) {
+                    $this->options['from_email_domain'] = $domains[0];
+                    update_option($this->option_name, $this->options);
+                }
+                
+                return true;
+            }
+            
+            $this->clear_sending_domains();
+            return false;
+            
+        } catch (Exception $e) {
+            $this->clear_sending_domains();
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                error_log('EmailIt API connection test failed: ' . $e->getMessage());
+            }
+            return false;
+        }
+    }
+
+    public static function is_api_active() {
+        return self::$api_active;
+    }
+
+    private function update_sending_domains(array $domains) {
+        update_option($this->sending_domains_option, $domains, false);
+    }
+
+    private function clear_sending_domains() {
+        delete_option($this->sending_domains_option);
+    }
+
+    public function get_sending_domains() {
+        return get_option($this->sending_domains_option, []);
+    }
+
+    public function is_valid_sending_domain(string $email): bool {
+        $domains = $this->get_sending_domains();
+        if (empty($domains)) {
+            return false;
+        }
+
+        $emailDomain = substr(strrchr($email, "@"), 1);
+        return in_array($emailDomain, $domains);
+    }
+
+    // Admin UI Methods
+    public function show_api_inactive_notice() {
+        $settings_url = admin_url('options-general.php?page=emailit-settings');
+        ?>
+        <div class="notice notice-error">
+            <p>
+                <strong>EmailIt Sending is currently disabled.</strong> 
+                Please check your <a href="<?php echo esc_url($settings_url); ?>">EmailIt Settings</a> and verify your API key.
+            </p>
+        </div>
+        <?php
     }
 
     public function add_admin_menu() {
@@ -329,19 +149,74 @@ class EmailItMailer {
             [$this, 'settings_page']
         );
     }
+    
+    public function add_email_input_styles() {
+        ?>
+        <style>
+            .emailit-email-input-group {
+                display: flex;
+                gap: 0;
+                max-width: 400px;
+            }
+            .emailit-email-input-group input {
+                border-top-right-radius: 0;
+                border-bottom-right-radius: 0;
+                flex: 1;
+            }
+            .emailit-email-input-group select {
+                border-top-left-radius: 0;
+                border-bottom-left-radius: 0;
+                border-left: none;
+                min-width: 120px;
+                background-color: #f0f0f1;
+            }
+            .emailit-email-input-group .at-symbol {
+                background: #f0f0f1;
+                padding: 0 8px;
+                line-height: 30px;
+                border: 1px solid #8c8f94;
+                border-left: none;
+                border-right: none;
+                color: #50575e;
+            }
+        </style>
+        <?php
+    }
+    
+    public function from_email_callback() {
+        $prefix = isset($this->options['from_email_prefix']) ? $this->options['from_email_prefix'] : 'no-reply';
+        $selected_domain = isset($this->options['from_email_domain']) ? $this->options['from_email_domain'] : '';
+        $domains = $this->get_sending_domains();
+        
+        echo '<div class="emailit-email-input-group">';
+        echo '<input type="text" id="emailit_from_email_prefix" name="' . $this->option_name . '[from_email_prefix]" value="' . esc_attr($prefix) . '" class="regular-text">';
+        echo '<span class="at-symbol">@</span>';
+        echo '<select id="emailit_from_email_domain" name="' . $this->option_name . '[from_email_domain]">';
+        if (empty($domains)) {
+            echo '<option value="">No domains available</option>';
+        } else {
+            foreach ($domains as $domain) {
+                echo '<option value="' . esc_attr($domain) . '"' . selected($domain, $selected_domain, false) . '>' . esc_html($domain) . '</option>';
+            }
+        }
+        echo '</select>';
+        echo '</div>';
+        echo '<p class="description">Select your sending domain from the verified domains list.</p>';
+    }
 
+    // Settings Methods
     public function register_settings() {
         register_setting($this->option_name, $this->option_name, [
             'sanitize_callback' => [$this, 'sanitize_settings']
         ]);
-
+    
         add_settings_section(
             'emailit_main_section',
             'Main Settings',
             [$this, 'section_callback'],
             'emailit-settings'
         );
-
+    
         add_settings_field(
             'emailit_api_key',
             'API Key',
@@ -349,15 +224,15 @@ class EmailItMailer {
             'emailit-settings',
             'emailit_main_section'
         );
-
+    
         add_settings_field(
-            'emailit_from_email',
+            'emailit_from_email_prefix',
             'Default From Email',
             [$this, 'from_email_callback'],
             'emailit-settings',
             'emailit_main_section'
         );
-
+    
         add_settings_field(
             'emailit_from_name',
             'Default From Name',
@@ -365,43 +240,6 @@ class EmailItMailer {
             'emailit-settings',
             'emailit_main_section'
         );
-    }
-
-    public function sanitize_settings($input) {
-        $sanitized = [];
-        
-        if (isset($input['api_key'])) {
-            $sanitized['api_key'] = sanitize_text_field($input['api_key']);
-        }
-        
-        if (isset($input['from_email'])) {
-            $sanitized['from_email'] = sanitize_email($input['from_email']);
-        }
-        
-        if (isset($input['from_name'])) {
-            $sanitized['from_name'] = sanitize_text_field($input['from_name']);
-        }
-        
-        return $sanitized;
-    }
-
-    public function section_callback() {
-        echo '<p>Configure your EmailIt settings below.</p>';
-    }
-
-    public function api_key_callback() {
-        $value = isset($this->options['api_key']) ? $this->options['api_key'] : '';
-        echo '<input type="password" id="emailit_api_key" name="' . $this->option_name . '[api_key]" value="' . esc_attr($value) . '" class="regular-text">';
-    }
-
-    public function from_email_callback() {
-        $value = isset($this->options['from_email']) ? $this->options['from_email'] : '';
-        echo '<input type="email" id="emailit_from_email" name="' . $this->option_name . '[from_email]" value="' . esc_attr($value) . '" class="regular-text">';
-    }
-
-    public function from_name_callback() {
-        $value = isset($this->options['from_name']) ? $this->options['from_name'] : '';
-        echo '<input type="text" id="emailit_from_name" name="' . $this->option_name . '[from_name]" value="' . esc_attr($value) . '" class="regular-text">';
     }
 
     public function settings_page() {
@@ -421,32 +259,249 @@ class EmailItMailer {
                 submit_button('Save Settings');
                 ?>
             </form>
-            <?php if ($this->test_api_connection()): ?>
+            <?php if (self::$api_active): ?>
                 <div class="notice notice-success">
                     <p>✅ EmailIt API connection successful!</p>
+                    <?php 
+                    $domains = $this->get_sending_domains();
+                    if (!empty($domains)): 
+                    ?>
+                        <p><strong>Available Sending Domains:</strong></p>
+                        <ul style="list-style-type: disc; margin-left: 20px;">
+                            <?php foreach ($domains as $domain): ?>
+                                <li><?php echo esc_html($domain); ?></li>
+                            <?php endforeach; ?>
+                        </ul>
+                    <?php endif; ?>
+                </div>
+            <?php else: ?>
+                <div class="notice notice-error">
+                    <p>❌ EmailIt API connection failed. Please verify your API key.</p>
                 </div>
             <?php endif; ?>
         </div>
         <?php
     }
 
-    private function test_api_connection() {
-        if (empty($this->options['api_key'])) {
-            return false;
-        }
+    // Settings Callbacks
+    public function section_callback() {
+        echo '<p>Configure your EmailIt settings below.</p>';
+    }
 
-        try {
-            $client = new EmailIt\EmailItClient($this->options['api_key']);
-            // Try to list audiences as a simple API test
-            $client->audiences()->list(1, 1);
-            return true;
-        } catch (Exception $e) {
-            return false;
+    public function api_key_callback() {
+        $value = isset($this->options['api_key']) ? $this->options['api_key'] : '';
+        echo '<input type="password" id="emailit_api_key" name="' . $this->option_name . '[api_key]" value="' . esc_attr($value) . '" class="regular-text">';
+    }
+
+    public function from_name_callback() {
+        $value = isset($this->options['from_name']) ? $this->options['from_name'] : '';
+        echo '<input type="text" id="emailit_from_name" name="' . $this->option_name . '[from_name]" value="' . esc_attr($value) . '" class="regular-text">';
+    }
+
+    public function sanitize_settings($input) {
+        $sanitized = [];
+        
+        if (isset($input['api_key'])) {
+            $sanitized['api_key'] = sanitize_text_field($input['api_key']);
         }
+        
+        if (isset($input['from_email_prefix'])) {
+            $sanitized['from_email_prefix'] = sanitize_text_field($input['from_email_prefix']);
+        }
+        
+        if (isset($input['from_email_domain'])) {
+            $sanitized['from_email_domain'] = sanitize_text_field($input['from_email_domain']);
+        }
+        
+        if (isset($input['from_name'])) {
+            $sanitized['from_name'] = sanitize_text_field($input['from_name']);
+        }
+        
+        return $sanitized;
+    }
+
+    // Email Related Methods
+   public function send_mail_async($args) {
+       // Don't proceed if API is not active
+       if (!self::$api_active) {
+           error_log('EmailIt API is not active. Email sending is disabled.');
+           return false;
+       }
+   
+       try {
+           // Get plugin settings
+           $settings = $this->get_settings();
+           
+           if (empty($settings['api_key'])) {
+               error_log('EmailIt API key not configured');
+               return false;
+           }
+   
+           // Initialize EmailIt client
+           $client = new EmailIt\EmailItClient($settings['api_key']);
+           $email = $client->email();
+   
+           // Determine the from address
+           $from_email = $settings['from_email']; // Default from our settings
+           
+           // Check if wp_mail_from filter is set
+           $wp_mail_from = apply_filters('wp_mail_from', $from_email);
+           if ($wp_mail_from !== $from_email && $this->is_valid_sending_domain($wp_mail_from)) {
+               $from_email = $wp_mail_from;
+           }
+   
+           // Check headers for From: override
+           if (!empty($args['headers'])) {
+               $headers = is_array($args['headers']) ? $args['headers'] : explode("\n", str_replace("\r\n", "\n", $args['headers']));
+               
+               foreach ($headers as $header) {
+                   if (strpos($header, ':') !== false) {
+                       list($name, $value) = explode(':', $header, 2);
+                       $name = trim($name);
+                       $value = trim($value);
+                       
+                       if (strtolower($name) === 'from') {
+                           // Extract email from potential "Name <email@domain.com>" format
+                           if (preg_match('/<(.+?)>/', $value, $matches)) {
+                               $header_from = trim($matches[1]);
+                           } else {
+                               $header_from = trim($value);
+                           }
+                           
+                           // Only use this from address if it's from a valid sending domain
+                           if ($this->is_valid_sending_domain($header_from)) {
+                               $from_email = $header_from;
+                               break;
+                           } else {
+                               error_log('EmailIt invalid sending domain in headers: ' . $header_from);
+                           }
+                       }
+                   }
+               }
+           }
+   
+           // Final validation of from email
+           if (!$this->is_valid_sending_domain($from_email)) {
+               error_log('EmailIt no valid sending domain found for from address: ' . $from_email);
+               return false;
+           }
+   
+           // Set the validated from address
+           $email->from($from_email)
+                 ->replyTo($from_email);
+   
+           // Process the rest of the headers
+           if (!empty($args['headers'])) {
+               foreach ($headers as $header) {
+                   if (strpos($header, ':') !== false) {
+                       list($name, $value) = explode(':', $header, 2);
+                       $name = trim($name);
+                       $value = trim($value);
+                       
+                       switch (strtolower($name)) {
+                           case 'reply-to':
+                               $email->replyTo($value);
+                               break;
+                           case 'from':
+                               // Already handled above
+                               break;
+                           default:
+                               $email->addHeader($name, $value);
+                       }
+                   }
+               }
+           }
+   
+           // Set subject
+           $email->subject($args['subject']);
+   
+           // Set message content - HTML and plain text
+           $email->html($args['message']);
+           if (isset($args['text_message'])) {
+               $email->text($args['text_message']);
+           } else {
+               $email->text(wp_strip_all_tags($args['message']));
+           }
+   
+           // Process attachments if they exist
+           if (!empty($args['attachments'])) {
+               $attachments = is_array($args['attachments']) ? $args['attachments'] : [$args['attachments']];
+               foreach ($attachments as $attachment) {
+                   if (file_exists($attachment)) {
+                       $content = file_get_contents($attachment);
+                       $filename = basename($attachment);
+                       $mime_type = mime_content_type($attachment);
+                       $email->addAttachment($filename, base64_encode($content), $mime_type);
+                   }
+               }
+           }
+   
+           // Process recipients
+           $to = $args['to'];
+           if (is_array($to)) {
+               // Send individual email to each recipient
+               foreach ($to as $recipient) {
+                   $email->to($recipient);
+                   $result = $email->send();
+                   
+                   if (defined('WP_DEBUG') && WP_DEBUG) {
+                       error_log('Email sent to: ' . $recipient);
+                   }
+               }
+           } else {
+               // Single recipient
+               $email->to($to);
+               $result = $email->send();
+               if (defined('WP_DEBUG') && WP_DEBUG) {
+                   error_log('Email sent to: ' . $to);
+               }
+           }
+           
+           if (defined('WP_DEBUG') && WP_DEBUG) {
+               error_log('Async email sent successfully via EmailIt SDK');
+           }
+   
+           return true;
+   
+       } catch (Exception $e) {
+           if (defined('WP_DEBUG') && WP_DEBUG) {
+               error_log('Async EmailIt SDK error: ' . $e->getMessage());
+           }
+           return false;
+       }
+   }
+
+    public function process_email_batch($args) {
+        foreach($args['batch'] as $recipient) {
+            $this->send_mail_async([
+                'to' => $recipient,
+                'subject' => $args['subject'],
+                'message' => $args['message'],
+                'headers' => $args['headers'],
+                'text_message' => $args['text_message']
+            ]);
+        }
+        
+        wp_clear_scheduled_hook('emailit_process_email_batch', [$args]);
+    }
+
+    public function add_cron_interval($schedules) {
+        $schedules['emailit_every_minute'] = array(
+            'interval' => 60, // 60 seconds = 1 minute
+            'display'  => 'Every Minute'
+        );
+        return $schedules;
     }
 
     public function get_settings() {
-        return $this->options;
+        $settings = $this->options;
+        // Combine email parts for the from_email setting
+        if (!empty($settings['from_email_prefix']) && !empty($settings['from_email_domain'])) {
+            $settings['from_email'] = $settings['from_email_prefix'] . '@' . $settings['from_email_domain'];
+        } else {
+            $settings['from_email'] = '';
+        }
+        return $settings;
     }
 }
 
