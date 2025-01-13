@@ -27,6 +27,13 @@ class EmailItBBPress {
 
 	private function __construct() {
 		add_action('plugins_loaded', [$this, 'init']);
+		add_action('emailit_register_tabs', [$this, 'register_bbpress_tab']);
+	}
+	
+	public function register_bbpress_tab() {
+		$emailit = EmailItMailer::get_instance();
+		// Register before docs (100) but after settings (10)
+		$emailit->register_tab('bbpress', 'BBPress', [$this, 'render_bbpress_tab'], 90);
 	}
 
 	public function init() {
@@ -66,6 +73,15 @@ class EmailItBBPress {
 		}
 
 		return true;
+	}
+	
+	public function render_bbpress_tab() {
+		?>
+		<div class="card" style="max-width: 800px; margin-top: 20px;">
+			<h2>BBPress Integration Settings</h2>
+			<!-- Your BBPress settings content here -->
+		</div>
+		<?php
 	}
 
 	public function custom_bbp_notify_topic_subscribers($reply_id = 0, $topic_id = 0, $forum_id = 0, $anonymous_data = false, $reply_author = 0) {

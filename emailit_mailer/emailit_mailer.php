@@ -39,7 +39,10 @@ class EmailItMailer {
            'from_email_domain' => '', // Will be populated from sending domains
            'from_name' => ''
        ]);
-
+       
+       // Register default tabs
+         $this->register_default_tabs();
+      
         // Add admin menu
         add_action('admin_menu', [$this, 'add_admin_menu']);
         // Register settings
@@ -47,6 +50,29 @@ class EmailItMailer {
         // Add CSS for email input styling
         add_action('admin_head', [$this, 'add_email_input_styles']);
     }
+    
+    private function register_default_tabs() {
+         $this->tabs = [
+             'settings' => [
+                 'label' => 'Settings',
+                 'callback' => [$this, 'render_settings_tab'],
+                 'position' => 10
+             ],
+             'docs' => [
+                 'label' => 'Documentation',
+                 'callback' => [$this, 'render_docs_tab'],
+                 'position' => 100  // High number ensures it's the last tab
+             ]
+         ];
+     }
+    
+     public function register_tab($id, $label, $callback, $position = 50) {
+         $this->tabs[$id] = [
+             'label' => $label,
+             'callback' => $callback,
+             'position' => $position
+         ];
+     }
 
     public function init() {
         // Test API connection on init
@@ -241,44 +267,76 @@ class EmailItMailer {
             'emailit_main_section'
         );
     }
-
+    
     public function settings_page() {
         if (!current_user_can('manage_options')) {
             return;
         }
+    
+        // Fire action to let plugins register their tabs
+        do_action('emailit_register_tabs');
+    
+        // Sort tabs by position
+        uasort($this->tabs, function($a, $b) {
+            return $a['position'] <=> $b['position'];
+        });
+    
+        // Get current tab
+        $current_tab = isset($_GET['tab']) ? sanitize_text_field($_GET['tab']) : 'settings';
         ?>
         <div class="wrap">
-            <div style="margin: 20px 0;">
-                <img src="<?php echo plugins_url('assets/emailit-logo.svg', __FILE__); ?>" alt="EmailIt Logo" style="max-width: 200px; height: auto;">
-            </div>
-            <h1><?php echo esc_html(get_admin_page_title()); ?></h1>
-            <form action="options.php" method="post">
-                <?php
-                settings_fields($this->option_name);
-                do_settings_sections('emailit-settings');
-                submit_button('Save Settings');
-                ?>
-            </form>
-            <?php if (self::$api_active): ?>
-                <div class="notice notice-success">
-                    <p>✅ EmailIt API connection successful!</p>
-                    <?php 
-                    $domains = $this->get_sending_domains();
-                    if (!empty($domains)): 
-                    ?>
-                        <p><strong>Available Sending Domains:</strong></p>
-                        <ul style="list-style-type: disc; margin-left: 20px;">
-                            <?php foreach ($domains as $domain): ?>
-                                <li><?php echo esc_html($domain); ?></li>
-                            <?php endforeach; ?>
-                        </ul>
-                    <?php endif; ?>
-                </div>
-            <?php else: ?>
-                <div class="notice notice-error">
+            <?php if (!self::$api_active): ?>
+                <div class="notice notice-error" style="margin: 20px 0;">
                     <p>❌ EmailIt API connection failed. Please verify your API key.</p>
                 </div>
             <?php endif; ?>
+    
+            <div style="margin: 20px 0;">
+                <img src="<?php echo plugins_url('assets/emailit-logo.svg', __FILE__); ?>" alt="EmailIt Logo" style="max-width: 200px; height: auto;">
+            </div>
+            
+            <h1 class="nav-tab-wrapper">
+                <?php foreach ($this->tabs as $tab_id => $tab): ?>
+                    <a href="?page=emailit-settings&tab=<?php echo esc_attr($tab_id); ?>" 
+                       class="nav-tab <?php echo $current_tab === $tab_id ? 'nav-tab-active' : ''; ?>">
+                        <?php echo esc_html($tab['label']); ?>
+                    </a>
+                <?php endforeach; ?>
+            </h1>
+    
+            <?php 
+            // Show settings saved message
+            settings_errors('emailit_settings');
+            
+            // Render current tab content
+            if (isset($this->tabs[$current_tab]['callback'])) {
+                call_user_func($this->tabs[$current_tab]['callback']);
+            }
+            ?>
+        </div>
+        <?php
+    }
+
+   public function render_settings_tab() {
+       ?>
+       <div class="card" style="max-width: 800px; margin-top: 20px;">
+           <form action="options.php" method="post">
+               <?php
+               settings_fields($this->option_name);
+               do_settings_sections('emailit-settings');
+               submit_button('Save Settings');
+               ?>
+           </form>
+       </div>
+       <?php 
+   }
+   
+    public function render_docs_tab() {
+        ?>
+        <div class="card" style="max-width: 800px; margin-top: 20px;">
+            <h2>Documentation</h2>
+            <!-- Documentation content will go here -->
+            <p>Documentation content placeholder.</p>
         </div>
         <?php
     }
@@ -298,27 +356,37 @@ class EmailItMailer {
         echo '<input type="text" id="emailit_from_name" name="' . $this->option_name . '[from_name]" value="' . esc_attr($value) . '" class="regular-text">';
     }
 
-    public function sanitize_settings($input) {
-        $sanitized = [];
-        
-        if (isset($input['api_key'])) {
-            $sanitized['api_key'] = sanitize_text_field($input['api_key']);
-        }
-        
-        if (isset($input['from_email_prefix'])) {
-            $sanitized['from_email_prefix'] = sanitize_text_field($input['from_email_prefix']);
-        }
-        
-        if (isset($input['from_email_domain'])) {
-            $sanitized['from_email_domain'] = sanitize_text_field($input['from_email_domain']);
-        }
-        
-        if (isset($input['from_name'])) {
-            $sanitized['from_name'] = sanitize_text_field($input['from_name']);
-        }
-        
-        return $sanitized;
-    }
+   public function sanitize_settings($input) {
+       $sanitized = [];
+       
+       if (isset($input['api_key'])) {
+           $sanitized['api_key'] = sanitize_text_field($input['api_key']);
+       }
+       
+       if (isset($input['from_email_prefix'])) {
+           $sanitized['from_email_prefix'] = sanitize_text_field($input['from_email_prefix']);
+       }
+       
+       if (isset($input['from_email_domain'])) {
+           $sanitized['from_email_domain'] = sanitize_text_field($input['from_email_domain']);
+       }
+       
+       if (isset($input['from_name'])) {
+           $sanitized['from_name'] = sanitize_text_field($input['from_name']);
+       }
+   
+       // Add success message if settings are saved successfully
+       if ($this->test_api_connection()) {
+           add_settings_error(
+               'emailit_settings',
+               'settings_updated',
+               '✅ EmailIt API connection successful!',
+               'updated'
+           );
+       }
+       
+       return $sanitized;
+   }
 
     // Email Related Methods
    public function send_mail_async($args) {

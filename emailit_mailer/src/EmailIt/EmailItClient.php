@@ -130,7 +130,7 @@ class EmailItClient
 	 */
 	public function sendEmailRequest(array $params): array
 	{
-		$requiredFields = ['from', 'to', 'reply_to', 'subject'];
+		$requiredFields = ['from', 'to', 'subject'];
 		$this->validateRequired($params, $requiredFields);
 		
 		if (!isset($params['html']) && !isset($params['text'])) {
