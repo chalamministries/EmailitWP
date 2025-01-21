@@ -3,7 +3,7 @@
 Plugin Name: EmailIt BBPress Integration
 Plugin URI: 
 Description: BBPress integration for EmailIt Mailer
-Version: 1.0
+Version: 1.6
 Author: Steven Gauerke
 Requires at least: 5.8
 Requires PHP: 7.4
@@ -80,6 +80,7 @@ class EmailItBBPress {
 		<div class="card" style="max-width: 800px; margin-top: 20px;">
 			<h2>BBPress Integration Settings</h2>
 			<!-- Your BBPress settings content here -->
+			Custom Email Template Coming Soon!
 		</div>
 		<?php
 	}
@@ -90,6 +91,11 @@ class EmailItBBPress {
 		
 		if (empty($user_ids)) {
 			return false;
+		}
+		
+		if(WP_DEBUG) {
+			error_log("BB Press notify Users");
+			error_log(print_r($user_ids, true));
 		}
 		
 		// Get reply author ID if not provided
@@ -150,6 +156,11 @@ class EmailItBBPress {
 		$batches = array_chunk($recipients, $batch_size);
 		
 		foreach($batches as $index => $batch) {
+			if(WP_DEBUG) {
+				
+				error_log("Here's the batch");
+				error_log(json_encode($batch));
+			}
 			wp_schedule_event(
 				time() + ($index * 60),
 				'emailit_every_minute',

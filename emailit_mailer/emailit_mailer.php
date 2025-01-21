@@ -3,7 +3,7 @@
 Plugin Name: EmailIt Mailer for WordPress
 Plugin URI: 
 Description: Overrides WordPress default mail function to use EmailIt SDK
-Version: 1.5
+Version: 1.6
 Author: Steven Gauerke
 License: GPL2
 */
@@ -23,6 +23,7 @@ class EmailItMailer {
     private $option_name = 'emailit_settings';
     private static $api_active = false;
     private $sending_domains_option = 'emailit_sending_domains';
+    private $tabs = [];
     
     public static function get_instance() {
         if (self::$instance === null) {
@@ -49,6 +50,12 @@ class EmailItMailer {
         add_action('admin_init', [$this, 'register_settings']);
         // Add CSS for email input styling
         add_action('admin_head', [$this, 'add_email_input_styles']);
+    }
+    
+    private function log_debug($message, $data = []) {
+        if(WP_DEBUG) {
+         error_log('EmailIt Debug: ' . $message . ($data ? ' Data: ' . json_encode($data) : ''));
+       }
     }
     
     private function register_default_tabs() {
@@ -83,9 +90,18 @@ class EmailItMailer {
             add_action('admin_notices', [$this, 'show_api_inactive_notice']);
         }
 
-        add_action('emailit_send_mail_async', [$this, 'send_mail_async']);
+        
         add_action('emailit_process_email_batch', [$this, 'process_email_batch']);
-        add_filter('cron_schedules', [$this, 'add_cron_interval']);
+        $this->log_debug('Registering cron hooks');
+        add_action('emailit_send_mail_async', function($args) {
+             $this->log_debug('Cron job emailit_send_mail_async executing', $args);
+             $this->send_mail_async($args);
+             });
+        add_filter('cron_schedules', function($schedules) {
+             $this->log_debug('Registering cron schedules');
+             return $this->add_cron_interval($schedules);
+         });
+        
     }
 
     // API Connection and Domain Management Methods
@@ -390,20 +406,22 @@ class EmailItMailer {
 
     // Email Related Methods
    public function send_mail_async($args) {
+      $this->log_debug('Entering send_mail_async', $args);
        // Don't proceed if API is not active
        if (!self::$api_active) {
-           error_log('EmailIt API is not active. Email sending is disabled.');
-           return false;
-       }
+            $this->log_debug('API not active, aborting');
+            return false;
+        }
    
        try {
            // Get plugin settings
            $settings = $this->get_settings();
-           
-           if (empty($settings['api_key'])) {
-               error_log('EmailIt API key not configured');
-               return false;
-           }
+            $this->log_debug('Retrieved settings', $settings);
+            
+            if (empty($settings['api_key'])) {
+            $this->log_debug('API key not configured');
+            return false;
+            }
    
            // Initialize EmailIt client
            $client = new EmailIt\EmailItClient($settings['api_key']);
@@ -506,6 +524,8 @@ class EmailItMailer {
    
            // Process recipients
            $to = $args['to'];
+           
+           error_log("just before send: " . json_encode($args));
            if (is_array($to)) {
                // Send individual email to each recipient
                foreach ($to as $recipient) {
@@ -532,11 +552,9 @@ class EmailItMailer {
            return true;
    
        } catch (Exception $e) {
-           if (defined('WP_DEBUG') && WP_DEBUG) {
-               error_log('Async EmailIt SDK error: ' . $e->getMessage());
-           }
-           return false;
-       }
+            $this->log_debug('Exception in send_mail_async: ' . $e->getMessage());
+            return false;
+        }
    }
 
     public function process_email_batch($args) {
@@ -589,18 +607,24 @@ $emailit_mailer->init();
         * @return bool Whether the email contents were sent successfully.
         */
        function wp_mail($to, $subject, $message, $headers = '', $attachments = array()) {
+           error_log("Sending email to: " . json_encode($to) . " [" . $subject . "]");
            
-           wp_schedule_single_event(
-               time(), 
-               'emailit_send_mail_async',
-               array(
-                   'to' => $to,
-                   'subject' => $subject,
-                   'message' => $message,
-                   'headers' => $headers,
-                   'attachments' => $attachments
-               )
+           // Add debugging for cron scheduling
+           $timestamp = time();
+           $hook = 'emailit_send_mail_async';
+           $args = array(
+               'to' => $to,
+               'subject' => $subject,
+               'message' => $message,
+               'headers' => $headers,
+               'attachments' => $attachments
            );
+           
+           error_log("Scheduling cron event: Hook: {$hook}, Timestamp: {$timestamp}");
+           
+           $scheduled = wp_schedule_single_event($timestamp, $hook, array($args));
+           
+           error_log("Cron scheduling result: " . ($scheduled ? "Success" : "Failed"));
            
            return true;
        }
