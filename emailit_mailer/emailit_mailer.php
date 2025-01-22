@@ -3,7 +3,7 @@
 Plugin Name: EmailIt Mailer for WordPress
 Plugin URI: 
 Description: Overrides WordPress default mail function to use EmailIt SDK
-Version: 1.6
+Version: 1.8
 Author: Steven Gauerke
 License: GPL2
 */
@@ -427,54 +427,66 @@ class EmailItMailer {
            $client = new EmailIt\EmailItClient($settings['api_key']);
            $email = $client->email();
    
-           // Determine the from address
-           $from_email = $settings['from_email']; // Default from our settings
+           // Inside the send_mail_async method in EmailItMailer class, replace the from email setting section with:
            
-           // Check if wp_mail_from filter is set
-           $wp_mail_from = apply_filters('wp_mail_from', $from_email);
-           if ($wp_mail_from !== $from_email && $this->is_valid_sending_domain($wp_mail_from)) {
-               $from_email = $wp_mail_from;
-           }
-   
-           // Check headers for From: override
-           if (!empty($args['headers'])) {
-               $headers = is_array($args['headers']) ? $args['headers'] : explode("\n", str_replace("\r\n", "\n", $args['headers']));
-               
-               foreach ($headers as $header) {
-                   if (strpos($header, ':') !== false) {
-                       list($name, $value) = explode(':', $header, 2);
-                       $name = trim($name);
-                       $value = trim($value);
-                       
-                       if (strtolower($name) === 'from') {
-                           // Extract email from potential "Name <email@domain.com>" format
-                           if (preg_match('/<(.+?)>/', $value, $matches)) {
-                               $header_from = trim($matches[1]);
-                           } else {
-                               $header_from = trim($value);
-                           }
-                           
-                           // Only use this from address if it's from a valid sending domain
-                           if ($this->is_valid_sending_domain($header_from)) {
-                               $from_email = $header_from;
-                               break;
-                           } else {
-                               error_log('EmailIt invalid sending domain in headers: ' . $header_from);
-                           }
-                       }
-                   }
-               }
-           }
-   
-           // Final validation of from email
-           if (!$this->is_valid_sending_domain($from_email)) {
-               error_log('EmailIt no valid sending domain found for from address: ' . $from_email);
-               return false;
-           }
-   
-           // Set the validated from address
-           $email->from($from_email)
-                 ->replyTo($from_email);
+             // Determine the from address and name
+             $from_email = $settings['from_email']; // Default from our settings
+             $from_name = $settings['from_name']; // Get default from name
+             
+             // Check if wp_mail_from filter is set
+             $wp_mail_from = apply_filters('wp_mail_from', $from_email);
+             $wp_mail_from_name = apply_filters('wp_mail_from_name', $from_name);
+             
+             if ($wp_mail_from !== $from_email && $this->is_valid_sending_domain($wp_mail_from)) {
+                 $from_email = $wp_mail_from;
+                 $from_name = $wp_mail_from_name;
+             }
+           
+             // Check headers for From: override
+             if (!empty($args['headers'])) {
+                 $headers = is_array($args['headers']) ? $args['headers'] : explode("\n", str_replace("\r\n", "\n", $args['headers']));
+                 
+                 foreach ($headers as $header) {
+                     if (strpos($header, ':') !== false) {
+                         list($name, $value) = explode(':', $header, 2);
+                         $name = trim($name);
+                         $value = trim($value);
+                         
+                         if (strtolower($name) === 'from') {
+                             // Extract email and name from "Name <email@domain.com>" format
+                             if (preg_match('/^(.*?)\s*<(.+?)>$/', $value, $matches)) {
+                                 $header_from_name = trim($matches[1]);
+                                 $header_from = trim($matches[2]);
+                             } else {
+                                 $header_from = trim($value);
+                                 $header_from_name = ''; // No name provided
+                             }
+                             
+                             // Only use this from address if it's from a valid sending domain
+                             if ($this->is_valid_sending_domain($header_from)) {
+                                 $from_email = $header_from;
+                                 if ($header_from_name) {
+                                     $from_name = $header_from_name;
+                                 }
+                                 break;
+                             } else {
+                                 error_log('EmailIt invalid sending domain in headers: ' . $header_from);
+                             }
+                         }
+                     }
+                 }
+             }
+           
+             // Final validation of from email
+             if (!$this->is_valid_sending_domain($from_email)) {
+                 error_log('EmailIt no valid sending domain found for from address: ' . $from_email);
+                 return false;
+             }
+           
+             // Set the validated from address with name if available
+             $from = $from_name ? sprintf('%s <%s>', $from_name, $from_email) : $from_email;
+             $email->from($from)
+                   ->replyTo($from_email);
    
            // Process the rest of the headers
            if (!empty($args['headers'])) {
