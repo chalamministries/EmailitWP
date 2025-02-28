@@ -3,7 +3,7 @@
 Plugin Name: EmailIt Mailer for WordPress
 Plugin URI: 
 Description: Overrides WordPress default mail function to use EmailIt SDK
-Version: 1.8
+Version: 1.9
 Author: Steven Gauerke
 License: GPL2
 */
@@ -56,6 +56,8 @@ class EmailItMailer {
         add_action('admin_init', [$this, 'register_settings']);
         // Add CSS for email input styling
         add_action('admin_head', [$this, 'add_email_input_styles']);
+        
+        add_filter('emailit_before_send_mail', [$this, 'process_email_data'], 10, 1);
     }
     
     private function log_debug($message, $data = []) {
@@ -411,169 +413,211 @@ class EmailItMailer {
    }
 
     // Email Related Methods
-   public function send_mail_async($args) {
-      $this->log_debug('Entering send_mail_async', $args);
-       // Don't proceed if API is not active
-       if (!self::$api_active) {
-            $this->log_debug('API not active, aborting');
-            return false;
-        }
-   
-       try {
-           // Get plugin settings
-           $settings = $this->get_settings();
-            $this->log_debug('Retrieved settings', $settings);
+   /**
+    * This is a patch for the EmailIt Mailer plugin to ensure 'to' fields are 
+    * always arrays, even when they come in as strings.
+    * 
+    * Find the send_mail_async method in your emailit_mailer.php file and replace it with this version.
+    */
+    
+    public function process_email_data($args) {
+        // Check if this is a FluentCRM email by looking for our custom header
+        $is_fluentcrm_email = false;
+        
+        if (!empty($args['headers'])) {
+            $headers = is_array($args['headers']) ? $args['headers'] : explode("\n", str_replace("\r\n", "\n", $args['headers']));
             
-            if (empty($settings['api_key'])) {
-            $this->log_debug('API key not configured');
-            return false;
+            foreach ($headers as $header) {
+                if (is_string($header) && strpos($header, ':') !== false) {
+                    list($name, $value) = explode(':', $header, 2);
+                    if (trim(strtolower($name)) === 'x-emailit-source' && trim($value) === 'FluentCRM') {
+                        $is_fluentcrm_email = true;
+                        break;
+                    }
+                } elseif (is_array($header) && isset($header['X-EmailIt-Source']) && $header['X-EmailIt-Source'] === 'FluentCRM') {
+                    $is_fluentcrm_email = true;
+                    break;
+                }
             }
-   
-           // Initialize EmailIt client
-           $client = new EmailIt\EmailItClient($settings['api_key']);
-           $email = $client->email();
-   
-           // Inside the send_mail_async method in EmailItMailer class, replace the from email setting section with:
-           
-             // Determine the from address and name
-             $from_email = $settings['from_email']; // Default from our settings
-             $from_name = $settings['from_name']; // Get default from name
-             
-             // Check if wp_mail_from filter is set
-             $wp_mail_from = apply_filters('wp_mail_from', $from_email);
-             $wp_mail_from_name = apply_filters('wp_mail_from_name', $from_name);
-             
-             if ($wp_mail_from !== $from_email && $this->is_valid_sending_domain($wp_mail_from)) {
-                 $from_email = $wp_mail_from;
-                 $from_name = $wp_mail_from_name;
-             }
-           
-             // Check headers for From: override
-             if (!empty($args['headers'])) {
-                 $headers = is_array($args['headers']) ? $args['headers'] : explode("\n", str_replace("\r\n", "\n", $args['headers']));
-                 
-                 foreach ($headers as $header) {
-                     if (strpos($header, ':') !== false) {
-                         list($name, $value) = explode(':', $header, 2);
-                         $name = trim($name);
-                         $value = trim($value);
-                         
-                         if (strtolower($name) === 'from') {
-                             // Extract email and name from "Name <email@domain.com>" format
-                             if (preg_match('/^(.*?)\s*<(.+?)>$/', $value, $matches)) {
-                                 $header_from_name = trim($matches[1]);
-                                 $header_from = trim($matches[2]);
-                             } else {
-                                 $header_from = trim($value);
-                                 $header_from_name = ''; // No name provided
-                             }
-                             
-                             // Only use this from address if it's from a valid sending domain
-                             if ($this->is_valid_sending_domain($header_from)) {
-                                 $from_email = $header_from;
-                                 if ($header_from_name) {
-                                     $from_name = $header_from_name;
-                                 }
-                                 break;
-                             } else {
-                                 error_log('EmailIt invalid sending domain in headers: ' . $header_from);
-                             }
-                         }
-                     }
-                 }
-             }
-           
-             // Final validation of from email
-             if (!$this->is_valid_sending_domain($from_email)) {
-                 error_log('EmailIt no valid sending domain found for from address: ' . $from_email);
-                 return false;
-             }
-           
-             // Set the validated from address with name if available
-             $from = $from_name ? sprintf('%s <%s>', $from_name, $from_email) : $from_email;
-             $email->from($from)
-                   ->replyTo($from_email);
-   
-           // Process the rest of the headers
-           if (!empty($args['headers'])) {
-               foreach ($headers as $header) {
-                   if (strpos($header, ':') !== false) {
-                       list($name, $value) = explode(':', $header, 2);
-                       $name = trim($name);
-                       $value = trim($value);
-                       
-                       switch (strtolower($name)) {
-                           case 'reply-to':
-                               $email->replyTo($value);
-                               break;
-                           case 'from':
-                               // Already handled above
-                               break;
-                           default:
-                               $email->addHeader($name, $value);
-                       }
-                   }
-               }
-           }
-   
-           // Set subject
-           $email->subject($args['subject']);
-   
-           // Set message content - HTML and plain text
-           $email->html($args['message']);
-           if (isset($args['text_message'])) {
-               $email->text($args['text_message']);
-           } else {
-               $email->text(wp_strip_all_tags($args['message']));
-           }
-   
-           // Process attachments if they exist
-           if (!empty($args['attachments'])) {
-               $attachments = is_array($args['attachments']) ? $args['attachments'] : [$args['attachments']];
-               foreach ($attachments as $attachment) {
-                   if (file_exists($attachment)) {
-                       $content = file_get_contents($attachment);
-                       $filename = basename($attachment);
-                       $mime_type = mime_content_type($attachment);
-                       $email->addAttachment($filename, base64_encode($content), $mime_type);
-                   }
-               }
-           }
-   
-           // Process recipients
-           $to = $args['to'];
-           
-           error_log("just before send: " . json_encode($args));
-           if (is_array($to)) {
-               // Send individual email to each recipient
-               foreach ($to as $recipient) {
-                   $email->to($recipient);
-                   $result = $email->send();
-                   
-                   if (defined('WP_DEBUG') && WP_DEBUG) {
-                       error_log('Email sent to: ' . $recipient);
-                   }
-               }
-           } else {
-               // Single recipient
-               $email->to($to);
-               $result = $email->send();
-               if (defined('WP_DEBUG') && WP_DEBUG) {
-                   error_log('Email sent to: ' . $to);
-               }
-           }
-           
-           if (defined('WP_DEBUG') && WP_DEBUG) {
-               error_log('Async email sent successfully via EmailIt SDK');
-           }
-   
-           return true;
-   
-       } catch (Exception $e) {
-            $this->log_debug('Exception in send_mail_async: ' . $e->getMessage());
-            return false;
         }
-   }
+        
+        // If this is a FluentCRM email, apply your custom TO field logic
+        if ($is_fluentcrm_email) {
+            
+            // if (isset($args['to']) && !is_array($args['to'])) {
+            //     $args['to'] = [$args['to']];
+            // }
+            // 
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                error_log('EmailIt Mailer: Modified FluentCRM email data: ' . json_encode($args['to']));
+            }
+        }
+        
+        return $args;
+    }
+   
+  public function send_mail_async($args) {
+     $this->log_debug('Entering send_mail_async', $args);
+      // Don't proceed if API is not active
+      if (!self::$api_active) {
+           $this->log_debug('API not active, aborting');
+           return false;
+       }
+  
+      try {
+          // Get plugin settings
+          $settings = $this->get_settings();
+           $this->log_debug('Retrieved settings', $settings);
+           
+           if (empty($settings['api_key'])) {
+           $this->log_debug('API key not configured');
+           return false;
+           }
+  
+          // Initialize EmailIt client
+          $client = new EmailIt\EmailItClient($settings['api_key']);
+          $email = $client->email();
+  
+          // Inside the send_mail_async method in EmailItMailer class, replace the from email setting section with:
+          
+            // Determine the from address and name
+            $from_email = $settings['from_email']; // Default from our settings
+            $from_name = $settings['from_name']; // Get default from name
+            
+            // Check if wp_mail_from filter is set
+            $wp_mail_from = apply_filters('wp_mail_from', $from_email);
+            $wp_mail_from_name = apply_filters('wp_mail_from_name', $from_name);
+            
+            if ($wp_mail_from !== $from_email && $this->is_valid_sending_domain($wp_mail_from)) {
+                $from_email = $wp_mail_from;
+                $from_name = $wp_mail_from_name;
+            }
+          
+            // Check headers for From: override
+            if (!empty($args['headers'])) {
+                $headers = is_array($args['headers']) ? $args['headers'] : explode("\n", str_replace("\r\n", "\n", $args['headers']));
+                
+                foreach ($headers as $header) {
+                    if (strpos($header, ':') !== false) {
+                        list($name, $value) = explode(':', $header, 2);
+                        $name = trim($name);
+                        $value = trim($value);
+                        
+                        if (strtolower($name) === 'from') {
+                            // Extract email and name from "Name <email@domain.com>" format
+                            if (preg_match('/^(.*?)\s*<(.+?)>$/', $value, $matches)) {
+                                $header_from_name = trim($matches[1]);
+                                $header_from = trim($matches[2]);
+                            } else {
+                                $header_from = trim($value);
+                                $header_from_name = ''; // No name provided
+                            }
+                            
+                            // Only use this from address if it's from a valid sending domain
+                            if ($this->is_valid_sending_domain($header_from)) {
+                                $from_email = $header_from;
+                                if ($header_from_name) {
+                                    $from_name = $header_from_name;
+                                }
+                                break;
+                            } else {
+                                error_log('EmailIt invalid sending domain in headers: ' . $header_from);
+                            }
+                        }
+                    }
+                }
+            }
+          
+            // Final validation of from email
+            if (!$this->is_valid_sending_domain($from_email)) {
+                error_log('EmailIt no valid sending domain found for from address: ' . $from_email);
+                return false;
+            }
+          
+            // Set the validated from address with name if available
+            $from = $from_name ? sprintf('%s <%s>', $from_name, $from_email) : $from_email;
+            $email->from($from)
+                  ->replyTo($from_email);
+  
+          // Process the rest of the headers
+          if (!empty($args['headers'])) {
+              foreach ($headers as $header) {
+                  if (strpos($header, ':') !== false) {
+                      list($name, $value) = explode(':', $header, 2);
+                      $name = trim($name);
+                      $value = trim($value);
+                      
+                      switch (strtolower($name)) {
+                          case 'reply-to':
+                              $email->replyTo($value);
+                              break;
+                          case 'from':
+                              // Already handled above
+                              break;
+                          default:
+                              $email->addHeader($name, $value);
+                      }
+                  }
+              }
+          }
+  
+          // Set subject
+          $email->subject($args['subject']);
+  
+          // Set message content - HTML and plain text
+          $email->html($args['message']);
+          if (isset($args['text_message'])) {
+              $email->text($args['text_message']);
+          } else {
+              $email->text(wp_strip_all_tags($args['message']));
+          }
+  
+          // Process attachments if they exist
+          if (!empty($args['attachments'])) {
+              $attachments = is_array($args['attachments']) ? $args['attachments'] : [$args['attachments']];
+              foreach ($attachments as $attachment) {
+                  if (file_exists($attachment)) {
+                      $content = file_get_contents($attachment);
+                      $filename = basename($attachment);
+                      $mime_type = mime_content_type($attachment);
+                      $email->addAttachment($filename, base64_encode($content), $mime_type);
+                  }
+              }
+          }
+  
+          // Process recipients
+          $to = $args['to'];
+          
+          error_log("just before send: " . json_encode($args['to']));
+          if (is_array($to)) {
+              // Send individual email to each recipient
+              foreach ($to as $recipient) {
+                  $email->to($recipient);
+                  if (defined('WP_DEBUG') && WP_DEBUG) {
+                      error_log('Email sent to: ' . $recipient);
+                  }
+                  $result = $email->send();
+              }
+          } else {
+              // Single recipient
+              $email->to($to);
+              $result = $email->send();
+              if (defined('WP_DEBUG') && WP_DEBUG) {
+                  error_log('Email sent to: ' . $to);
+              }
+          }
+          
+          if (defined('WP_DEBUG') && WP_DEBUG) {
+              error_log('Async email sent successfully via EmailIt SDK');
+          }
+  
+          return true;
+  
+      } catch (Exception $e) {
+           $this->log_debug('Exception in send_mail_async: ' . $e->getMessage());
+           return false;
+       }
+  }
 
     public function process_email_batch($args) {
         foreach($args['batch'] as $recipient) {
@@ -625,7 +669,14 @@ $emailit_mailer->init();
         * @return bool Whether the email contents were sent successfully.
         */
        function wp_mail($to, $subject, $message, $headers = '', $attachments = array()) {
-           error_log("Sending email to: " . json_encode($to) . " [" . $subject . "]");
+           error_log("================= Sending email to: " . json_encode($to) . " [" . $subject . "]");
+           
+           // Convert string 'to' recipients to array format
+           if (!is_array($to)) {
+               $to = explode(',', $to);
+               // Trim whitespace from each recipient
+               $to = array_map('trim', $to);
+           }
            
            // Add debugging for cron scheduling
            $timestamp = time();
