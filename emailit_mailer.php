@@ -3,7 +3,7 @@
 Plugin Name: EmailIt Mailer for WordPress
 Plugin URI: 
 Description: Overrides WordPress default mail function to use EmailIt SDK
-Version: 1.9
+Version: 2.0
 Author: Steven Gauerke
 License: GPL2
 */
@@ -18,6 +18,7 @@ require_once plugin_dir_path(__FILE__) . 'autoload.php';
 if (!class_exists('EmailIt_Plugin_Updater')) {
     require_once plugin_dir_path(__FILE__) . 'class-emailit-updater.php';
 }
+require_once plugin_dir_path(__FILE__) . 'class-emailit-logger.php';
 
 class EmailItMailer {
     private static $instance = null;
@@ -26,6 +27,7 @@ class EmailItMailer {
     private static $api_active = false;
     private $sending_domains_option = 'emailit_sending_domains';
     private $tabs = [];
+    private $logger;
     
     public static function get_instance() {
         if (self::$instance === null) {
@@ -58,10 +60,12 @@ class EmailItMailer {
         add_action('admin_head', [$this, 'add_email_input_styles']);
         
         add_filter('emailit_before_send_mail', [$this, 'process_email_data'], 10, 1);
+        
+        $this->logger = EmailIt_Logger::get_instance();
     }
     
     private function log_debug($message, $data = []) {
-        if(WP_DEBUG) {
+        if (defined('WP_DEBUG') && WP_DEBUG) {
          error_log('EmailIt Debug: ' . $message . ($data ? ' Data: ' . json_encode($data) : ''));
        }
     }
@@ -144,9 +148,9 @@ class EmailItMailer {
             
         } catch (Exception $e) {
             $this->clear_sending_domains();
-            if (defined('WP_DEBUG') && WP_DEBUG) {
-                error_log('EmailIt API connection test failed: ' . $e->getMessage());
-            }
+            
+            $this->log_debug('EmailIt API connection test failed: ' . $e->getMessage());
+          
             return false;
         }
     }
@@ -448,9 +452,7 @@ class EmailItMailer {
             //     $args['to'] = [$args['to']];
             // }
             // 
-            if (defined('WP_DEBUG') && WP_DEBUG) {
-                error_log('EmailIt Mailer: Modified FluentCRM email data: ' . json_encode($args['to']));
-            }
+
         }
         
         return $args;
@@ -458,9 +460,23 @@ class EmailItMailer {
    
   public function send_mail_async($args) {
      $this->log_debug('Entering send_mail_async', $args);
+     
+     // Get log ID if available
+     $log_id = isset($args['log_id']) ? $args['log_id'] : false;
+     if (!$log_id) {
+         // Try to find matching log entry
+         $logger = EmailIt_Logger::get_instance();
+         $log_id = $logger->find_log_id_by_properties($args);
+     }
+     
       // Don't proceed if API is not active
       if (!self::$api_active) {
            $this->log_debug('API not active, aborting');
+           
+           if ($log_id) {
+               $logger->update_email_status($log_id, 'failed');
+           }
+           
            return false;
        }
   
@@ -521,7 +537,9 @@ class EmailItMailer {
                                 }
                                 break;
                             } else {
-                                error_log('EmailIt invalid sending domain in headers: ' . $header_from);
+                            
+                                $this->log_debug('EmailIt invalid sending domain in headers: ' . $header_from);
+                              
                             }
                         }
                     }
@@ -530,7 +548,9 @@ class EmailItMailer {
           
             // Final validation of from email
             if (!$this->is_valid_sending_domain($from_email)) {
-                error_log('EmailIt no valid sending domain found for from address: ' . $from_email);
+             
+                $this->log_debug('EmailIt no valid sending domain found for from address: ' . $from_email);
+              
                 return false;
             }
           
@@ -588,46 +608,81 @@ class EmailItMailer {
           // Process recipients
           $to = $args['to'];
           
-          error_log("just before send: " . json_encode($args['to']));
+         
+            $this->log_debug("just before send: " . json_encode($args['to']));
+          
+          
+          $success = true;
           if (is_array($to)) {
               // Send individual email to each recipient
               foreach ($to as $recipient) {
                   $email->to($recipient);
-                  if (defined('WP_DEBUG') && WP_DEBUG) {
-                      error_log('Email sent to: ' . $recipient);
-                  }
+                
+                      $this->log_debug('Email sent to: ' . $recipient);
+                  
                   $result = $email->send();
+                  if (!$result) {
+                      $success = false;
+                  }
               }
           } else {
               // Single recipient
               $email->to($to);
               $result = $email->send();
-              if (defined('WP_DEBUG') && WP_DEBUG) {
-                  error_log('Email sent to: ' . $to);
+              if (!$result) {
+                  $success = false;
               }
+              
+              
+                  $this->log_debug('Email sent to: ' . $to);
+              
           }
           
-          if (defined('WP_DEBUG') && WP_DEBUG) {
-              error_log('Async email sent successfully via EmailIt SDK');
+          // Update log status
+          if ($log_id) {
+              $logger = EmailIt_Logger::get_instance();
+              $logger->update_email_status($log_id, $success ? 'sent' : 'failed');
           }
+
+              $this->log_debug('Async email sent successfully via EmailIt SDK');
+          
   
-          return true;
+          return $success;
   
       } catch (Exception $e) {
            $this->log_debug('Exception in send_mail_async: ' . $e->getMessage());
+           if ($log_id) {
+               $logger = EmailIt_Logger::get_instance();
+               $logger->update_email_status($log_id, 'failed');
+           }
+           
            return false;
        }
   }
+  
 
     public function process_email_batch($args) {
+        
+      
         foreach($args['batch'] as $recipient) {
-            $this->send_mail_async([
+            $email_args = [
                 'to' => $recipient,
                 'subject' => $args['subject'],
                 'message' => $args['message'],
                 'headers' => $args['headers'],
-                'text_message' => $args['text_message']
-            ]);
+                'text_message' => isset($args['text_message']) ? $args['text_message'] : null
+            ];
+            
+            // Log the individual email
+            $log_id = $this->logger->log_email($email_args);
+            
+            // Add log ID to args for tracking
+            if ($log_id) {
+                $email_args['log_id'] = $log_id;
+            }
+            
+            // Send the email
+            $this->send_mail_async($email_args);
         }
         
         wp_clear_scheduled_hook('emailit_process_email_batch', [$args]);
@@ -669,7 +724,9 @@ $emailit_mailer->init();
         * @return bool Whether the email contents were sent successfully.
         */
        function wp_mail($to, $subject, $message, $headers = '', $attachments = array()) {
-           error_log("================= Sending email to: " . json_encode($to) . " [" . $subject . "]");
+       
+           $this->log_debug("================= Sending email to: " . json_encode($to) . " [" . $subject . "]");
+          
            
            // Convert string 'to' recipients to array format
            if (!is_array($to)) {
@@ -678,9 +735,7 @@ $emailit_mailer->init();
                $to = array_map('trim', $to);
            }
            
-           // Add debugging for cron scheduling
-           $timestamp = time();
-           $hook = 'emailit_send_mail_async';
+           // Create email args
            $args = array(
                'to' => $to,
                'subject' => $subject,
@@ -689,11 +744,28 @@ $emailit_mailer->init();
                'attachments' => $attachments
            );
            
-           error_log("Scheduling cron event: Hook: {$hook}, Timestamp: {$timestamp}");
+           // Log the email
+           $logger = EmailIt_Logger::get_instance();
+           $log_id = $logger->log_email($args);
+           
+           // Add log ID to args for tracking
+           if ($log_id) {
+               $args['log_id'] = $log_id;
+           }
+           
+           // Add debugging for cron scheduling
+           $timestamp = time();
+           $hook = 'emailit_send_mail_async';
+           
+           
+            $this->log_debug("Scheduling cron event: Hook: {$hook}, Timestamp: {$timestamp}");
+          
            
            $scheduled = wp_schedule_single_event($timestamp, $hook, array($args));
            
-           error_log("Cron scheduling result: " . ($scheduled ? "Success" : "Failed"));
+          
+           $this->log_debug("Cron scheduling result: " . ($scheduled ? "Success" : "Failed"));
+         
            
            return true;
        }
@@ -709,6 +781,11 @@ $emailit_mailer->init();
                'from_name' => get_option('blogname')
            ]);
        }
+   });
+   
+   add_action('wp_ajax_emailit_get_email_content', function() {
+       $logger = EmailIt_Logger::get_instance();
+       $logger->ajax_get_email_content();
    });
    
    // Create plugin assets directory and save the logo
