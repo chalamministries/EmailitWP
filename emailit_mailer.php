@@ -3,7 +3,7 @@
 Plugin Name: EmailIt Mailer for WordPress
 Plugin URI: https://github.com/chalamministries/EmailitWP
 Description: Overrides WordPress default mail function to use EmailIt SDK
-Version: 2.1
+Version: 2.2
 Author: Steven Gauerke
 License: GPL2
 */
