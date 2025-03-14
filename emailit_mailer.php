@@ -725,7 +725,7 @@ $emailit_mailer->init();
         */
        function wp_mail($to, $subject, $message, $headers = '', $attachments = array()) {
        
-           $emailit_mailer->log_debug("================= Sending email to: " . json_encode($to) . " [" . $subject . "]");
+           //$emailit_mailer->log_debug("================= Sending email to: " . json_encode($to) . " [" . $subject . "]");
           
            
            // Convert string 'to' recipients to array format
@@ -758,13 +758,13 @@ $emailit_mailer->init();
            $hook = 'emailit_send_mail_async';
            
            
-            $emailit_mailer->log_debug("Scheduling cron event: Hook: {$hook}, Timestamp: {$timestamp}");
+            //$emailit_mailer->log_debug("Scheduling cron event: Hook: {$hook}, Timestamp: {$timestamp}");
           
            
            $scheduled = wp_schedule_single_event($timestamp, $hook, array($args));
            
           
-           $emailit_mailer->log_debug("Cron scheduling result: " . ($scheduled ? "Success" : "Failed"));
+           //$emailit_mailer->log_debug("Cron scheduling result: " . ($scheduled ? "Success" : "Failed"));
          
            
            return true;
