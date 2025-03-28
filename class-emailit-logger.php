@@ -75,6 +75,7 @@ class EmailIt_Logger {
 				created_at datetime NOT NULL,
 				sent_at datetime DEFAULT NULL,
 				status varchar(20) DEFAULT 'pending',
+				error_message text DEFAULT NULL,
 				PRIMARY KEY (id),
 				KEY email_to (email_to(191)),
 				KEY created_at (created_at),
@@ -83,6 +84,12 @@ class EmailIt_Logger {
 			
 			require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
 			dbDelta($sql);
+		} else {
+			// If table exists, check if we need to add the error_message column
+			$column_exists = $wpdb->get_results("SHOW COLUMNS FROM {$table_name} LIKE 'error_message'");
+			if (empty($column_exists)) {
+				$wpdb->query("ALTER TABLE {$table_name} ADD COLUMN error_message text DEFAULT NULL");
+			}
 		}
 	}
 	
@@ -239,17 +246,27 @@ class EmailIt_Logger {
 	 * @param string $status The new status ('sent' or 'failed')
 	 * @return bool Whether the update was successful
 	 */
-	public function update_email_status($log_id, $status = 'sent') {
+	public function update_email_status($log_id, $status = 'sent', $error_message = '') {
 		global $wpdb;
+		
+		$data = [
+			'status' => $status,
+			'sent_at' => current_time('mysql')
+		];
+		
+		$format = ['%s', '%s'];
+		
+		// Add error message if provided
+		if ($status === 'failed' && !empty($error_message)) {
+			$data['error_message'] = $error_message;
+			$format[] = '%s';
+		}
 		
 		$result = $wpdb->update(
 			$this->table_name,
-			[
-				'status' => $status,
-				'sent_at' => current_time('mysql')
-			],
+			$data,
 			['id' => $log_id],
-			['%s', '%s'],
+			$format,
 			['%d']
 		);
 		
@@ -577,6 +594,17 @@ class EmailIt_Logger {
 											<span class="status-indicator <?php echo esc_attr($status_class); ?>">
 												<?php echo esc_html(ucfirst($log->status)); ?>
 											</span>
+											
+											<?php if ($log->status === 'failed' && !empty($log->error_message)): ?>
+												<div class="error-message-container">
+													<a href="#" class="toggle-error-message" data-log-id="<?php echo esc_attr($log->id); ?>">
+														<span class="dashicons dashicons-info-outline"></span> View Error
+													</a>
+													<div id="error-message-<?php echo esc_attr($log->id); ?>" class="error-message" style="display:none;">
+														<?php echo esc_html($log->error_message); ?>
+													</div>
+												</div>
+											<?php endif; ?>
 										</td>
 										<td>
 											<a href="#" class="view-content" data-log-id="<?php echo esc_attr($log->id); ?>">View</a> | 
@@ -670,6 +698,33 @@ class EmailIt_Logger {
 						color: black;
 						text-decoration: none;
 					}
+					
+					.error-message-container {
+						margin-top: 5px;
+					}
+					.toggle-error-message {
+						color: #dc3232;
+						text-decoration: none;
+						display: flex;
+						align-items: center;
+						font-size: 12px;
+					}
+					.toggle-error-message .dashicons {
+						font-size: 16px;
+						width: 16px;
+						height: 16px;
+						margin-right: 3px;
+					}
+					.error-message {
+						margin-top: 5px;
+						padding: 8px;
+						background-color: #f8f8f8;
+						border-left: 3px solid #dc3232;
+						font-family: monospace;
+						font-size: 12px;
+						word-break: break-word;
+						max-width: 300px;
+					}
 				</style>
 				
 				<script>
@@ -718,6 +773,12 @@ class EmailIt_Logger {
 							if ($(e.target).is('.emailit-modal')) {
 								$('.emailit-modal').hide();
 							}
+						});
+						
+						$('.toggle-error-message').click(function(e) {
+							e.preventDefault();
+							var logId = $(this).data('log-id');
+							$('#error-message-' + logId).slideToggle();
 						});
 					});
 				</script>

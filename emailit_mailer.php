@@ -3,7 +3,7 @@
 Plugin Name: EmailIt Mailer for WordPress
 Plugin URI: https://github.com/chalamministries/EmailitWP
 Description: Overrides WordPress default mail function to use EmailIt SDK
-Version: 2.4
+Version: 2.5
 Author: Steven Gauerke
 License: GPL2
 */
@@ -58,6 +58,8 @@ class EmailItMailer {
         add_action('admin_init', [$this, 'register_settings']);
         // Add CSS for email input styling
         add_action('admin_head', [$this, 'add_email_input_styles']);
+        //Test email action
+        add_action('admin_init', [$this, 'process_test_email_submission']);
         
         add_filter('emailit_before_send_mail', [$this, 'process_email_data'], 10, 1);
         
@@ -356,7 +358,65 @@ class EmailItMailer {
                ?>
            </form>
        </div>
-       <?php 
+       
+       <div class="card" style="max-width: 800px; margin-top: 20px;">
+           <h2>Send Test Email</h2>
+           <p>Use this form to send a test email and verify your EmailIt configuration.</p>
+           
+           <form method="post" action="">
+               <?php wp_nonce_field('emailit_send_test_email', 'emailit_test_email_nonce'); ?>
+               
+               <table class="form-table">
+                   <tr>
+                       <th scope="row"><label for="test_email_to">Send To</label></th>
+                       <td>
+                           <input type="email" id="test_email_to" name="test_email_to" 
+                                  class="regular-text" 
+                                  value="<?php echo esc_attr(get_option('admin_email')); ?>" required>
+                           <p class="description">Email address to send the test to.</p>
+                       </td>
+                   </tr>
+                   <tr>
+                       <th scope="row"><label for="test_email_subject">Subject</label></th>
+                       <td>
+                           <input type="text" id="test_email_subject" name="test_email_subject" 
+                                  class="regular-text" 
+                                  value="EmailIt Test Email" required>
+                       </td>
+                   </tr>
+                   <tr>
+                       <th scope="row"><label>Email Content</label></th>
+                       <td>
+                           <p>The test email will include:</p>
+                           <ul style="list-style-type: disc; margin-left: 20px;">
+                               <li>Basic formatting test (bold, italic, links)</li>
+                               <li>Sending domain verification</li>
+                               <li>Current WordPress site information</li>
+                               <li>Current date and time</li>
+                           </ul>
+                       </td>
+                   </tr>
+                   <tr>
+                       <th scope="row"><label for="force_error">Force Error</label></th>
+                       <td>
+                           <label>
+                               <input type="checkbox" id="force_error" name="force_error" value="1">
+                               Deliberately trigger an error to test error logging
+                           </label>
+                           <p class="description">
+                               This will attempt to send from an invalid domain to generate an API error.
+                               The error will be logged and displayed in the email logs.
+                           </p>
+                       </td>
+                   </tr>
+               </table>
+               
+               <p>
+                   <input type="submit" name="send_test_email" class="button button-primary" value="Send Test Email">
+               </p>
+           </form>
+       </div>
+       <?php
    }
    
     public function render_docs_tab() {
@@ -469,195 +529,247 @@ class EmailItMailer {
          $log_id = $logger->find_log_id_by_properties($args);
      }
      
-      // Don't proceed if API is not active
-      if (!self::$api_active) {
-           $this->log_debug('API not active, aborting');
-           
-           if ($log_id) {
-               $logger->update_email_status($log_id, 'failed');
-           }
-           
-           return false;
-       }
-  
-      try {
-          // Get plugin settings
-          $settings = $this->get_settings();
-           $this->log_debug('Retrieved settings', $settings);
-           
-           if (empty($settings['api_key'])) {
-           $this->log_debug('API key not configured');
-           return false;
-           }
-  
-          // Initialize EmailIt client
-          $client = new EmailIt\EmailItClient($settings['api_key']);
-          $email = $client->email();
-  
-          // Inside the send_mail_async method in EmailItMailer class, replace the from email setting section with:
-          
-            // Determine the from address and name
-            $from_email = $settings['from_email']; // Default from our settings
-            $from_name = $settings['from_name']; // Get default from name
-            
-            // Check if wp_mail_from filter is set
-            $wp_mail_from = apply_filters('wp_mail_from', $from_email);
-            $wp_mail_from_name = apply_filters('wp_mail_from_name', $from_name);
-            
-            if ($wp_mail_from !== $from_email && $this->is_valid_sending_domain($wp_mail_from)) {
-                $from_email = $wp_mail_from;
-                $from_name = $wp_mail_from_name;
-            }
-          
-            // Check headers for From: override
-            if (!empty($args['headers'])) {
-                $headers = is_array($args['headers']) ? $args['headers'] : explode("\n", str_replace("\r\n", "\n", $args['headers']));
-                
-                foreach ($headers as $header) {
-                    if (strpos($header, ':') !== false) {
-                        list($name, $value) = explode(':', $header, 2);
-                        $name = trim($name);
-                        $value = trim($value);
-                        
-                        if (strtolower($name) === 'from') {
-                            // Extract email and name from "Name <email@domain.com>" format
-                            if (preg_match('/^(.*?)\s*<(.+?)>$/', $value, $matches)) {
-                                $header_from_name = trim($matches[1]);
-                                $header_from = trim($matches[2]);
-                            } else {
-                                $header_from = trim($value);
-                                $header_from_name = ''; // No name provided
-                            }
-                            
-                            // Only use this from address if it's from a valid sending domain
-                            if ($this->is_valid_sending_domain($header_from)) {
-                                $from_email = $header_from;
-                                if ($header_from_name) {
-                                    $from_name = $header_from_name;
-                                }
-                                break;
-                            } else {
-                            
-                                $this->log_debug('EmailIt invalid sending domain in headers: ' . $header_from);
-                              
-                            }
-                        }
-                    }
-                }
-            }
-          
-            // Final validation of from email
-            if (!$this->is_valid_sending_domain($from_email)) {
-             
-                $this->log_debug('EmailIt no valid sending domain found for from address: ' . $from_email);
-              
-                return false;
-            }
-          
-            // Set the validated from address with name if available
-            $from = $from_name ? sprintf('%s <%s>', $from_name, $from_email) : $from_email;
-            $email->from($from)
-                  ->replyTo($from_email);
-  
-          // Process the rest of the headers
-          if (!empty($args['headers'])) {
-              foreach ($headers as $header) {
-                  if (strpos($header, ':') !== false) {
-                      list($name, $value) = explode(':', $header, 2);
-                      $name = trim($name);
-                      $value = trim($value);
-                      
-                      switch (strtolower($name)) {
-                          case 'reply-to':
-                              $email->replyTo($value);
-                              break;
-                          case 'from':
-                              // Already handled above
-                              break;
-                          default:
-                              $email->addHeader($name, $value);
-                      }
-                  }
-              }
-          }
-  
-          // Set subject
-          $email->subject($args['subject']);
-  
-          // Set message content - HTML and plain text
-          $email->html($args['message']);
-          if (isset($args['text_message'])) {
-              $email->text($args['text_message']);
-          } else {
-              $email->text(wp_strip_all_tags($args['message']));
-          }
-  
-          // Process attachments if they exist
-          if (!empty($args['attachments'])) {
-              $attachments = is_array($args['attachments']) ? $args['attachments'] : [$args['attachments']];
-              foreach ($attachments as $attachment) {
-                  if (file_exists($attachment)) {
-                      $content = file_get_contents($attachment);
-                      $filename = basename($attachment);
-                      $mime_type = mime_content_type($attachment);
-                      $email->addAttachment($filename, base64_encode($content), $mime_type);
-                  }
-              }
-          }
-  
-          // Process recipients
-          $to = $args['to'];
-          
+     // Check if this is a forced error test
+     $is_forced_error = false;
+     if (!empty($args['headers'])) {
+         $headers = is_array($args['headers']) ? $args['headers'] : explode("\n", str_replace("\r\n", "\n", $args['headers']));
          
-            $this->log_debug("just before send: " . json_encode($args['to']));
-          
-          
-          $success = true;
-          if (is_array($to)) {
-              // Send individual email to each recipient
-              foreach ($to as $recipient) {
-                  $email->to($recipient);
-                
-                      $this->log_debug('Email sent to: ' . $recipient);
-                  
-                  $result = $email->send();
-                  if (!$result) {
-                      $success = false;
-                  }
-              }
-          } else {
-              // Single recipient
-              $email->to($to);
-              $result = $email->send();
-              if (!$result) {
-                  $success = false;
-              }
-              
-              
-                  $this->log_debug('Email sent to: ' . $to);
-              
-          }
-          
-          // Update log status
-          if ($log_id) {
-              $logger = EmailIt_Logger::get_instance();
-              $logger->update_email_status($log_id, $success ? 'sent' : 'failed');
-          }
-
-              $this->log_debug('Async email sent successfully via EmailIt SDK');
-          
-  
-          return $success;
-  
-      } catch (Exception $e) {
-           $this->log_debug('Exception in send_mail_async: ' . $e->getMessage());
-           if ($log_id) {
-               $logger = EmailIt_Logger::get_instance();
-               $logger->update_email_status($log_id, 'failed');
-           }
-           
-           return false;
-       }
+         foreach ($headers as $header) {
+             if (is_string($header) && strpos($header, ':') !== false) {
+                 list($name, $value) = explode(':', $header, 2);
+                 $name = trim($name);
+                 $value = trim($value);
+                 
+                 if (strtolower($name) === 'x-emailit-force-error' && trim($value) === 'true') {
+                     $is_forced_error = true;
+                     break;
+                 }
+             }
+         }
+     }
+     
+     // Don't proceed if API is not active (unless this is a forced error test)
+     if (!self::$api_active && !$is_forced_error) {
+         $this->log_debug('API not active, aborting');
+         
+         if ($log_id) {
+             $logger = EmailIt_Logger::get_instance();
+             $logger->update_email_status($log_id, 'failed', 'API connection is not active. Check API key configuration.');
+         }
+         
+         return false;
+     }
+     
+     try {
+         // Get plugin settings
+         $settings = $this->get_settings();
+         $this->log_debug('Retrieved settings', $settings);
+         
+         if (empty($settings['api_key'])) {
+             $this->log_debug('API key not configured');
+             return false;
+         }
+     
+         // Initialize EmailIt client
+         $client = new EmailIt\EmailItClient($settings['api_key']);
+         $email = $client->email();
+     
+         // Determine the from address and name
+         $from_email = $settings['from_email']; // Default from our settings
+         $from_name = $settings['from_name']; // Get default from name
+         
+         // Check if wp_mail_from filter is set (this is how we inject our invalid from for forced errors)
+         $wp_mail_from = apply_filters('wp_mail_from', $from_email);
+         $wp_mail_from_name = apply_filters('wp_mail_from_name', $from_name);
+         
+         // For forced error tests, we'll use whatever from address is provided, even if invalid
+         if ($is_forced_error) {
+              $random_string = substr(md5(time()), 0, 10);
+              $invalid_domain = 'nonexistent-domain-' . $random_string . '.xyz';
+              $invalid_from = 'error-test@' . $invalid_domain;
+             $from_email = $invalid_from;
+             $from_name = $wp_mail_from_name;
+             $this->log_debug('Force error test using invalid from: ' . $from_email);
+         } else if ($wp_mail_from !== $from_email && $this->is_valid_sending_domain($wp_mail_from)) {
+             // For normal emails, only use if it's a valid sending domain
+             $from_email = $wp_mail_from;
+             $from_name = $wp_mail_from_name;
+         }
+         
+         // Check headers for From: override (for normal emails)
+         if (!$is_forced_error && !empty($args['headers'])) {
+             foreach ($headers as $header) {
+                 if (strpos($header, ':') !== false) {
+                     list($name, $value) = explode(':', $header, 2);
+                     $name = trim($name);
+                     $value = trim($value);
+                     
+                     if (strtolower($name) === 'from') {
+                         // Extract email and name from "Name <email@domain.com>" format
+                         if (preg_match('/^(.*?)\s*<(.+?)>$/', $value, $matches)) {
+                             $header_from_name = trim($matches[1]);
+                             $header_from = trim($matches[2]);
+                         } else {
+                             $header_from = trim($value);
+                             $header_from_name = ''; // No name provided
+                         }
+                         
+                         // Only use this from address if it's from a valid sending domain
+                         if ($this->is_valid_sending_domain($header_from)) {
+                             $from_email = $header_from;
+                             if ($header_from_name) {
+                                 $from_name = $header_from_name;
+                             }
+                             break;
+                         } else {
+                             $this->log_debug('EmailIt invalid sending domain in headers: ' . $header_from);
+                         }
+                     }
+                 }
+             }
+         }
+       
+         // Final validation of from email - skip for forced error tests
+         if (!$is_forced_error && !$this->is_valid_sending_domain($from_email)) {
+             $this->log_debug('EmailIt no valid sending domain found for from address: ' . $from_email);
+             
+             if ($log_id) {
+                 $logger = EmailIt_Logger::get_instance();
+                 $logger->update_email_status($log_id, 'failed', 'Invalid sending domain: ' . $from_email);
+             }
+             
+             return false;
+         }
+       
+         // Set the validated from address with name if available
+         $from = $from_name ? sprintf('%s <%s>', $from_name, $from_email) : $from_email;
+         $email->from($from)
+               ->replyTo($from_email);
+     
+         // Process the rest of the headers
+         if (!empty($args['headers'])) {
+             foreach ($headers as $header) {
+                 if (strpos($header, ':') !== false) {
+                     list($name, $value) = explode(':', $header, 2);
+                     $name = trim($name);
+                     $value = trim($value);
+                     
+                     switch (strtolower($name)) {
+                         case 'reply-to':
+                             $email->replyTo($value);
+                             break;
+                         case 'from':
+                             // Already handled above
+                             break;
+                         case 'x-emailit-force-error':
+                             // Skip this internal header
+                             break;
+                         default:
+                             $email->addHeader($name, $value);
+                     }
+                 }
+             }
+         }
+     
+         // Set subject
+         $email->subject($args['subject']);
+     
+         // Set message content - HTML and plain text
+         $email->html($args['message']);
+         if (isset($args['text_message'])) {
+             $email->text($args['text_message']);
+         } else {
+             $email->text(wp_strip_all_tags($args['message']));
+         }
+     
+         // Process attachments if they exist
+         if (!empty($args['attachments'])) {
+             $attachments = is_array($args['attachments']) ? $args['attachments'] : [$args['attachments']];
+             foreach ($attachments as $attachment) {
+                 if (file_exists($attachment)) {
+                     $content = file_get_contents($attachment);
+                     $filename = basename($attachment);
+                     $mime_type = mime_content_type($attachment);
+                     $email->addAttachment($filename, base64_encode($content), $mime_type);
+                 }
+             }
+         }
+     
+         // Process recipients
+         try {
+                 // Process recipients
+                 $to = $args['to'];
+                 
+                 $this->log_debug("just before send: " . json_encode($args['to']));
+                 
+                 $success = true;
+                 $error_message = '';
+                 
+                 if (is_array($to)) {
+                     // Send individual email to each recipient
+                     foreach ($to as $recipient) {
+                         $email->to($recipient);
+                         
+                         try {
+                             $result = $email->send();
+                             if (!$result) {
+                                 $success = false;
+                                 $error_message = 'Unknown error from EmailIt API. Send method returned false.';
+                                 break;
+                             }
+                         } catch (Exception $e) {
+                             $success = false;
+                             $error_message = $e->getMessage();
+                             $this->log_debug('Error sending to ' . $recipient . ': ' . $error_message);
+                             break; // Stop on first error
+                         }
+                     }
+                 } else {
+                     // Single recipient
+                     $email->to($to);
+                     
+                     try {
+                         $result = $email->send();
+                         if (!$result) {
+                             $success = false;
+                             $error_message = 'Unknown error from EmailIt API. Send method returned false.';
+                         }
+                     } catch (Exception $e) {
+                         $success = false;
+                         $error_message = $e->getMessage();
+                         $this->log_debug('Error sending to ' . $to . ': ' . $error_message);
+                     }
+                 }
+                 
+                 // Update log status
+                 if ($log_id) {
+                     $logger = EmailIt_Logger::get_instance();
+                     $logger->update_email_status($log_id, $success ? 'sent' : 'failed', $error_message);
+                 }
+         
+                 $this->log_debug($success ? 'Async email sent successfully via EmailIt SDK' : 'Failed to send email: ' . $error_message);
+                 
+                 return $success;
+             } catch (Exception $e) {
+                 $error_message = $e->getMessage();
+                 $this->log_debug('Exception in send_mail_async: ' . $error_message);
+                 if ($log_id) {
+                     $logger = EmailIt_Logger::get_instance();
+                     $logger->update_email_status($log_id, 'failed', $error_message);
+                 }
+                 
+                 return false;
+             }
+         } catch (Exception $e) {
+             $error_message = $e->getMessage();
+             $this->log_debug('Exception in send_mail_async: ' . $error_message);
+             if ($log_id) {
+                 $logger = EmailIt_Logger::get_instance();
+                 $logger->update_email_status($log_id, 'failed', $error_message);
+             }
+             
+             return false;
+         }
   }
   
 
@@ -705,6 +817,222 @@ class EmailItMailer {
             $settings['from_email'] = '';
         }
         return $settings;
+    }
+    
+    public function process_test_email_submission() {
+        if (
+            isset($_POST['send_test_email']) && 
+            isset($_POST['emailit_test_email_nonce']) && 
+            wp_verify_nonce($_POST['emailit_test_email_nonce'], 'emailit_send_test_email')
+        ) {
+            $to = sanitize_email($_POST['test_email_to']);
+            $subject = sanitize_text_field($_POST['test_email_subject']);
+            $force_error = isset($_POST['force_error']) ? (bool) $_POST['force_error'] : false;
+            
+            if (!is_email($to)) {
+                add_settings_error(
+                    'emailit_test_email',
+                    'invalid_email',
+                    'Please enter a valid email address.',
+                    'error'
+                );
+                return;
+            }
+            
+            // Generate the test email content
+            $html_content = $this->get_test_email_content($force_error);
+            $text_content = wp_strip_all_tags($html_content);
+            
+            if ($force_error) {
+                // Generate a random string to create a non-existent domain
+                $random_string = substr(md5(time()), 0, 10);
+                $invalid_domain = 'nonexistent-domain-' . $random_string . '.xyz';
+                $invalid_from = 'error-test@' . $invalid_domain;
+                
+                // Create a temporary filter to use invalid sender domain
+                add_filter('wp_mail_from', function($from) use ($invalid_from) {
+                    return $invalid_from;
+                });
+                
+                add_filter('wp_mail_from_name', function($name) {
+                    return 'EmailIt Error Test';
+                });
+                
+                // Standard headers
+                $headers = [
+                    'Content-Type: text/html; charset=UTF-8',
+                    'X-EmailIt-Source: Test',
+                    'X-EmailIt-Force-Error: true'
+                ];
+                
+                // Log what we're doing
+                if (defined('WP_DEBUG') && WP_DEBUG) {
+                    error_log('EmailIt Test: Forcing error with invalid sender: ' . $invalid_from);
+                }
+                
+                try {
+                    // Use our direct wp_mail override
+                    $result = wp_mail($to, $subject . ' (Forced Error Test)', $html_content, $headers, []);
+                    
+                    add_settings_error(
+                        'emailit_test_email',
+                        'forced_error',
+                        'Error test initiated! Check the email logs to see the error details. The test email attempted to send from the invalid domain "' . esc_html($invalid_domain) . '".',
+                        'updated'
+                    );
+                } catch (Exception $e) {
+                    add_settings_error(
+                        'emailit_test_email',
+                        'error_caught',
+                        'Error caught as expected: ' . esc_html($e->getMessage()),
+                        'updated'
+                    );
+                }
+                
+                // Remove our temporary filters
+                remove_filter('wp_mail_from', '__return_empty_string', 1);
+                remove_filter('wp_mail_from_name', '__return_empty_string', 1);
+                
+            } else {
+                // Normal email sending
+                $headers = [
+                    'Content-Type: text/html; charset=UTF-8',
+                    'X-EmailIt-Source: Test'
+                ];
+                
+                $result = wp_mail($to, $subject, $html_content, $headers);
+                
+                if ($result) {
+                    add_settings_error(
+                        'emailit_test_email',
+                        'email_sent',
+                        'Test email has been sent! Please check your inbox.',
+                        'updated'
+                    );
+                } else {
+                    add_settings_error(
+                        'emailit_test_email',
+                        'email_failed',
+                        'Failed to send test email. Check your EmailIt settings and try again.',
+                        'error'
+                    );
+                }
+            }
+        }
+    }
+    
+    /**
+     * Generate HTML content for the test email
+     */
+    private function get_test_email_content($force_error = false) {
+        $site_name = get_bloginfo('name');
+        $site_url = get_bloginfo('url');
+        $admin_email = get_option('admin_email');
+        $date_time = date('Y-m-d H:i:s');
+        
+        // Get the current from email
+        $from_email = $this->options['from_email_prefix'] . '@' . $this->options['from_email_domain'];
+        
+        // Get EmailIt sending domains
+        $sending_domains = $this->get_sending_domains();
+        $domain_list = !empty($sending_domains) 
+            ? implode(', ', $sending_domains) 
+            : 'No sending domains configured';
+        
+        ob_start();
+        ?>
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <style>
+                body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; }
+                .container { padding: 20px; }
+                .header { background-color: #15c182; color: white; padding: 15px; text-align: center; border-radius: 5px 5px 0 0; }
+                .content { background: #f9f9f9; padding: 20px; border-left: 1px solid #ddd; border-right: 1px solid #ddd; }
+                .footer { background: #f1f1f1; padding: 15px; text-align: center; font-size: 12px; color: #666; border-radius: 0 0 5px 5px; border: 1px solid #ddd; }
+                .section { margin-bottom: 20px; padding-bottom: 20px; border-bottom: 1px solid #eee; }
+                h2 { color: #15c182; }
+                .success { color: #15c182; }
+                .warning { color: #ff9800; }
+                .error { color: #f44336; }
+                table { border-collapse: collapse; width: 100%; }
+                th, td { padding: 8px; text-align: left; border-bottom: 1px solid #ddd; }
+                th { background-color: #f2f2f2; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h1>EmailIt Test Email<?php echo $force_error ? ' (Error Test)' : ''; ?></h1>
+                </div>
+                <div class="content">
+                    <?php if ($force_error): ?>
+                    <div class="section" style="background-color: #fff3cd; padding: 10px; border-left: 4px solid #ffc107;">
+                        <h2 style="color: #856404;">Error Test Mode</h2>
+                        <p>This email is part of a test to verify error logging. It will be sent to a non-existent domain and is expected to fail.</p>
+                        <p>Check your email logs to see the error details.</p>
+                    </div>
+                    <?php endif; ?>
+                    
+                    <div class="section">
+                        <h2>Formatting Test</h2>
+                        <p>This paragraph is in <strong>bold</strong>, <em>italic</em>, and has a <a href="<?php echo esc_url($site_url); ?>">link to your site</a>.</p>
+                        <p>Here's a list of items:</p>
+                        <ul>
+                            <li>Item 1 with <strong>formatting</strong></li>
+                            <li>Item 2 with <em>emphasis</em></li>
+                            <li>Item 3 with a <a href="https://anthropic.com">link to Anthropic</a></li>
+                        </ul>
+                    </div>
+                    
+                    <div class="section">
+                        <h2>Sending Domain Information</h2>
+                        <p>
+                            <strong>From Email:</strong> <?php echo esc_html($from_email); ?>
+                            <?php if ($this->is_valid_sending_domain($from_email)): ?>
+                                <span class="success">✓ Valid sending domain</span>
+                            <?php else: ?>
+                                <span class="error">✗ Not a valid sending domain</span>
+                            <?php endif; ?>
+                        </p>
+                        <p><strong>Available Sending Domains:</strong> <?php echo esc_html($domain_list); ?></p>
+                    </div>
+                    
+                    <div class="section">
+                        <h2>WordPress Site Information</h2>
+                        <table>
+                            <tr>
+                                <th>Site Name</th>
+                                <td><?php echo esc_html($site_name); ?></td>
+                            </tr>
+                            <tr>
+                                <th>Site URL</th>
+                                <td><?php echo esc_html($site_url); ?></td>
+                            </tr>
+                            <tr>
+                                <th>Admin Email</th>
+                                <td><?php echo esc_html($admin_email); ?></td>
+                            </tr>
+                            <tr>
+                                <th>PHP Version</th>
+                                <td><?php echo esc_html(phpversion()); ?></td>
+                            </tr>
+                            <tr>
+                                <th>WordPress Version</th>
+                                <td><?php echo esc_html(get_bloginfo('version')); ?></td>
+                            </tr>
+                        </table>
+                    </div>
+                </div>
+                <div class="footer">
+                    <p>This test email was sent from EmailIt Mailer plugin on <?php echo esc_html($date_time); ?></p>
+                    <p>If you received this email, your EmailIt configuration is working correctly!</p>
+                </div>
+            </div>
+        </body>
+        </html>
+        <?php
+        return ob_get_clean();
     }
 }
 
