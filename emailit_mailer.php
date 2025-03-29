@@ -3,7 +3,7 @@
 Plugin Name: EmailIt Mailer for WordPress
 Plugin URI: https://github.com/chalamministries/EmailitWP
 Description: Overrides WordPress default mail function to use EmailIt SDK
-Version: 2.5
+Version: 2.5.1
 Author: Steven Gauerke
 License: GPL2
 */
@@ -643,6 +643,8 @@ class EmailItMailer {
        
          // Set the validated from address with name if available
          $from = $from_name ? sprintf('%s <%s>', $from_name, $from_email) : $from_email;
+           
+     
          $email->from($from)
                ->replyTo($from_email);
      
@@ -656,7 +658,13 @@ class EmailItMailer {
                      
                      switch (strtolower($name)) {
                          case 'reply-to':
-                             $email->replyTo($value);
+                             // Extract just the email from "Name <email@domain.com>" format
+                             if (preg_match('/<([^>]+)>/', $value, $matches)) {
+                                 $reply_email = trim($matches[1]);
+                             } else {
+                                 $reply_email = trim($value);
+                             }
+                             $email->replyTo($reply_email);
                              break;
                          case 'from':
                              // Already handled above
@@ -719,7 +727,7 @@ class EmailItMailer {
                              }
                          } catch (Exception $e) {
                              $success = false;
-                             $error_message = $e->getMessage();
+                             $error_message = $e->getMessage() . "\n==DEBUG== " . json_encode($headers);
                              $this->log_debug('Error sending to ' . $recipient . ': ' . $error_message);
                              break; // Stop on first error
                          }
@@ -736,7 +744,7 @@ class EmailItMailer {
                          }
                      } catch (Exception $e) {
                          $success = false;
-                         $error_message = $e->getMessage();
+                         $error_message = $e->getMessage() . "\n==DEBUG== " . json_encode($headers);
                          $this->log_debug('Error sending to ' . $to . ': ' . $error_message);
                      }
                  }
