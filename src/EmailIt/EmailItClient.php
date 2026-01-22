@@ -8,7 +8,7 @@ class EmailItClient
 	private string $baseUrl;
 	private array $headers;
 	
-	public function __construct(string $apiKey, string $baseUrl = 'https://api.emailit.com/v1')
+	public function __construct(string $apiKey, string $baseUrl = 'https://api.emailit.com/v2')
 	{
 		$this->apiKey = $apiKey;
 		$this->baseUrl = $baseUrl;

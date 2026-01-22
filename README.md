@@ -71,6 +71,14 @@ For support issues:
 
 ## Changelog
 
+### 3.0.0
+- **BREAKING CHANGE**: Updated to EmailIt API v2 - requires new API key generation
+- Fixed cron job scheduling for async email sending
+- Fixed MIME encoding issue causing raw multipart content to display
+- Improved header filtering to prevent Content-Type conflicts
+- Added upgrade notice for users migrating from 2.5.1 or earlier
+- Enhanced debug logging for troubleshooting
+
 ### 1.8
 - Initial public release
 - Added support for async email sending

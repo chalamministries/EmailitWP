@@ -3,7 +3,7 @@
 Plugin Name: EmailIt Mailer for WordPress
 Plugin URI: https://github.com/chalamministries/EmailitWP
 Description: Overrides WordPress default mail function to use EmailIt SDK
-Version: 2.5.1
+Version: 3.0.0
 Author: Steven Gauerke
 License: GPL2
 */
@@ -104,13 +104,20 @@ class EmailItMailer {
             add_action('admin_notices', [$this, 'show_api_inactive_notice']);
         }
 
-        
+        // Show upgrade notice for API key regeneration (until Feb 15, 2025)
+        if ($this->should_show_upgrade_notice()) {
+            add_action('admin_notices', [$this, 'show_upgrade_notice']);
+            add_action('wp_ajax_emailit_dismiss_upgrade_notice', [$this, 'dismiss_upgrade_notice']);
+        }
+
         add_action('emailit_process_email_batch', [$this, 'process_email_batch']);
-        $this->log_debug('Registering cron hooks');
-        add_action('emailit_send_mail_async', function($args) {
-             $this->log_debug('Cron job emailit_send_mail_async executing', $args);
-             $this->send_mail_async($args);
-             });
+
+        // Register the cron hook for async email sending
+        add_action('emailit_send_mail_async', [$this, 'handle_async_email_cron']);
+
+        if (defined('WP_DEBUG') && WP_DEBUG) {
+            error_log('EmailIt: Registered emailit_send_mail_async action hook');
+        }
         add_filter('cron_schedules', function($schedules) {
              $this->log_debug('Registering cron schedules');
              return $this->add_cron_interval($schedules);
@@ -194,6 +201,61 @@ class EmailItMailer {
             </p>
         </div>
         <?php
+    }
+
+    /**
+     * Check if we should show the upgrade notice
+     */
+    private function should_show_upgrade_notice() {
+        // Don't show after Feb 15, 2025
+        if (time() > strtotime('2025-02-15 23:59:59')) {
+            return false;
+        }
+
+        // Don't show if already dismissed
+        if (get_option('emailit_upgrade_notice_dismissed')) {
+            return false;
+        }
+
+        // Show on admin pages
+        return is_admin();
+    }
+
+    /**
+     * Show the upgrade notice
+     */
+    public function show_upgrade_notice() {
+        $settings_url = admin_url('options-general.php?page=emailit-settings');
+        ?>
+        <div class="notice notice-warning is-dismissible" id="emailit-upgrade-notice">
+            <p>
+                <strong>EmailIt Mailer 3.0 - Important Update:</strong>
+                If you upgraded from version 2.5.1 or earlier, you need to generate a new API key from your
+                <a href="https://emailit.com/dashboard" target="_blank">EmailIt Dashboard</a> and update it in your
+                <a href="<?php echo esc_url($settings_url); ?>">EmailIt Settings</a>.
+                The API has been updated to v2 which requires new API credentials.
+            </p>
+        </div>
+        <script>
+        jQuery(document).ready(function($) {
+            $(document).on('click', '#emailit-upgrade-notice .notice-dismiss', function() {
+                $.post(ajaxurl, {
+                    action: 'emailit_dismiss_upgrade_notice',
+                    _wpnonce: '<?php echo wp_create_nonce('emailit_dismiss_notice'); ?>'
+                });
+            });
+        });
+        </script>
+        <?php
+    }
+
+    /**
+     * AJAX handler to dismiss the upgrade notice
+     */
+    public function dismiss_upgrade_notice() {
+        check_ajax_referer('emailit_dismiss_notice');
+        update_option('emailit_upgrade_notice_dismissed', true);
+        wp_die();
     }
 
     public function add_admin_menu() {
@@ -670,7 +732,13 @@ class EmailItMailer {
                              // Already handled above
                              break;
                          case 'x-emailit-force-error':
-                             // Skip this internal header
+                         case 'x-emailit-source':
+                             // Skip internal headers
+                             break;
+                         case 'content-type':
+                         case 'content-transfer-encoding':
+                         case 'mime-version':
+                             // Skip content-type headers - the API handles this automatically
                              break;
                          default:
                              $email->addHeader($name, $value);
@@ -814,6 +882,17 @@ class EmailItMailer {
             'display'  => 'Every Minute'
         );
         return $schedules;
+    }
+
+    /**
+     * Handle the async email cron event
+     */
+    public function handle_async_email_cron($args) {
+        if (defined('WP_DEBUG') && WP_DEBUG) {
+            error_log('EmailIt: Cron job emailit_send_mail_async executing');
+            error_log('EmailIt: Args received: ' . print_r($args, true));
+        }
+        $this->send_mail_async($args);
     }
 
     public function get_settings() {
@@ -1089,20 +1168,36 @@ $emailit_mailer->init();
                $args['log_id'] = $log_id;
            }
            
-           // Add debugging for cron scheduling
-           $timestamp = time();
+           // Schedule a cron event to send the email asynchronously
+           $timestamp = time() + 5; // Schedule 5 seconds in the future
            $hook = 'emailit_send_mail_async';
-           
-           
-            //$emailit_mailer->log_debug("Scheduling cron event: Hook: {$hook}, Timestamp: {$timestamp}");
-          
-           
+
+           // Debug: Check if cron is disabled
+           if (defined('WP_DEBUG') && WP_DEBUG) {
+               error_log('EmailIt: Attempting to schedule cron event');
+               error_log('EmailIt: DISABLE_WP_CRON = ' . (defined('DISABLE_WP_CRON') && DISABLE_WP_CRON ? 'true' : 'false'));
+               error_log('EmailIt: Hook = ' . $hook);
+               error_log('EmailIt: Timestamp = ' . $timestamp . ' (current time: ' . time() . ')');
+           }
+
            $scheduled = wp_schedule_single_event($timestamp, $hook, array($args));
-           
-          
-           //$emailit_mailer->log_debug("Cron scheduling result: " . ($scheduled ? "Success" : "Failed"));
-         
-           
+
+           if (defined('WP_DEBUG') && WP_DEBUG) {
+               error_log('EmailIt: wp_schedule_single_event returned: ' . var_export($scheduled, true));
+
+               // Check if the event was actually scheduled
+               $next = wp_next_scheduled($hook, array($args));
+               error_log('EmailIt: wp_next_scheduled returned: ' . var_export($next, true));
+           }
+
+           // If cron scheduling failed, log error but still return true
+           // (the email was logged, it just won't be sent via cron)
+           if ($scheduled === false) {
+               if (defined('WP_DEBUG') && WP_DEBUG) {
+                   error_log('EmailIt: WARNING - Cron scheduling failed!');
+               }
+           }
+
            return true;
        }
    }
