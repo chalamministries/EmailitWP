@@ -483,10 +483,188 @@ class EmailItMailer {
    
     public function render_docs_tab() {
         ?>
-        <div class="card" style="max-width: 800px; margin-top: 20px;">
-            <h2>Documentation</h2>
-            <!-- Documentation content will go here -->
-            <p>Documentation content placeholder.</p>
+        <style>
+            .emailit-docs { max-width: 800px; margin-top: 20px; }
+            .emailit-docs h2 { color: #15c182; border-bottom: 2px solid #15c182; padding-bottom: 10px; margin-top: 30px; }
+            .emailit-docs h3 { color: #333; margin-top: 20px; }
+            .emailit-docs code { background: #f4f4f4; padding: 2px 6px; border-radius: 3px; font-size: 13px; }
+            .emailit-docs pre { background: #f4f4f4; padding: 15px; border-radius: 5px; overflow-x: auto; border-left: 4px solid #15c182; }
+            .emailit-docs pre code { background: none; padding: 0; }
+            .emailit-docs .note { background: #fff3cd; border-left: 4px solid #ffc107; padding: 10px 15px; margin: 15px 0; }
+            .emailit-docs .tip { background: #d4edda; border-left: 4px solid #28a745; padding: 10px 15px; margin: 15px 0; }
+            .emailit-docs .warning { background: #f8d7da; border-left: 4px solid #dc3545; padding: 10px 15px; margin: 15px 0; }
+            .emailit-docs ul { margin-left: 20px; }
+            .emailit-docs li { margin-bottom: 8px; }
+            .emailit-docs table { border-collapse: collapse; width: 100%; margin: 15px 0; }
+            .emailit-docs th, .emailit-docs td { border: 1px solid #ddd; padding: 10px; text-align: left; }
+            .emailit-docs th { background: #f4f4f4; }
+        </style>
+
+        <div class="emailit-docs">
+            <div class="card">
+                <h2>Getting Started</h2>
+
+                <h3>1. Get Your API Key</h3>
+                <p>To use EmailIt Mailer, you need an API key from your EmailIt account:</p>
+                <ol>
+                    <li>Log in to your <a href="https://emailit.com/dashboard" target="_blank">EmailIt Dashboard</a></li>
+                    <li>Navigate to <strong>Settings &gt; API Keys</strong></li>
+                    <li>Click <strong>Create New API Key</strong></li>
+                    <li>Copy the generated key and paste it in the Settings tab</li>
+                </ol>
+
+                <div class="warning">
+                    <strong>Version 3.0 Notice:</strong> If you upgraded from version 2.5.1 or earlier, you must generate a new API key. The plugin now uses EmailIt API v2 which requires new credentials.
+                </div>
+
+                <h3>2. Configure a Sending Domain</h3>
+                <p>Before sending emails, you need at least one verified sending domain:</p>
+                <ol>
+                    <li>In your EmailIt Dashboard, go to <strong>Sending Domains</strong></li>
+                    <li>Add your domain and follow the DNS verification steps</li>
+                    <li>Once verified, the domain will appear in the plugin settings</li>
+                </ol>
+
+                <h3>3. Set Your Default From Address</h3>
+                <p>Configure the default sender information in the Settings tab. This will be used for all WordPress emails unless overridden by another plugin.</p>
+            </div>
+
+            <div class="card">
+                <h2>How It Works</h2>
+
+                <p>EmailIt Mailer replaces WordPress's default <code>wp_mail()</code> function with a custom implementation that sends emails through the EmailIt API.</p>
+
+                <h3>Email Flow</h3>
+                <ol>
+                    <li>WordPress or a plugin calls <code>wp_mail()</code></li>
+                    <li>The email is logged to the database with "pending" status</li>
+                    <li>A WordPress cron job is scheduled to send the email asynchronously</li>
+                    <li>The cron job sends the email via EmailIt API</li>
+                    <li>The log entry is updated with "sent" or "failed" status</li>
+                </ol>
+
+                <div class="tip">
+                    <strong>Tip:</strong> Asynchronous sending prevents your site from slowing down when sending emails, especially useful for bulk operations.
+                </div>
+
+                <h3>WordPress Cron</h3>
+                <p>This plugin uses WordPress cron for email queuing. If you have <code>DISABLE_WP_CRON</code> set to <code>true</code>, you'll need to set up a real server cron job:</p>
+                <pre><code>* * * * * wget -q -O - <?php echo esc_html(site_url('/wp-cron.php?doing_wp_cron')); ?> &gt;/dev/null 2>&1</code></pre>
+            </div>
+
+            <div class="card">
+                <h2>Troubleshooting</h2>
+
+                <h3>Emails Not Sending</h3>
+                <table>
+                    <tr>
+                        <th>Issue</th>
+                        <th>Solution</th>
+                    </tr>
+                    <tr>
+                        <td>API key invalid</td>
+                        <td>Generate a new API key from your EmailIt Dashboard and update it in Settings</td>
+                    </tr>
+                    <tr>
+                        <td>No sending domains</td>
+                        <td>Add and verify at least one sending domain in your EmailIt account</td>
+                    </tr>
+                    <tr>
+                        <td>Cron jobs paused</td>
+                        <td>Check if <code>DISABLE_WP_CRON</code> is true in wp-config.php and set up a server cron</td>
+                    </tr>
+                    <tr>
+                        <td>Invalid from address</td>
+                        <td>Ensure the "from" email domain matches one of your verified sending domains</td>
+                    </tr>
+                </table>
+
+                <h3>Enable Debug Logging</h3>
+                <p>Add these lines to your <code>wp-config.php</code> to enable detailed logging:</p>
+                <pre><code>define('WP_DEBUG', true);
+define('WP_DEBUG_LOG', true);
+define('WP_DEBUG_DISPLAY', false);</code></pre>
+                <p>Then check <code>wp-content/debug.log</code> for entries starting with "EmailIt:"</p>
+
+                <h3>Check Cron Status</h3>
+                <p>Install the <a href="https://wordpress.org/plugins/wp-crontrol/" target="_blank">WP Crontrol</a> plugin to view scheduled cron events. Look for <code>emailit_send_mail_async</code> events.</p>
+            </div>
+
+            <div class="card">
+                <h2>For Developers</h2>
+
+                <h3>Available Filters</h3>
+
+                <p><strong>Modify the from email address:</strong></p>
+                <pre><code>add_filter('wp_mail_from', function($from_email) {
+    return 'custom@yourdomain.com';
+});</code></pre>
+
+                <p><strong>Modify the from name:</strong></p>
+                <pre><code>add_filter('wp_mail_from_name', function($from_name) {
+    return 'Custom Sender Name';
+});</code></pre>
+
+                <p><strong>Process email data before sending:</strong></p>
+                <pre><code>add_filter('emailit_before_send_mail', function($args) {
+    // Modify $args['to'], $args['subject'], $args['message'], etc.
+    return $args;
+});</code></pre>
+
+                <h3>Register Custom Settings Tabs</h3>
+                <pre><code>add_action('emailit_register_tabs', function() {
+    $emailit = EmailItMailer::get_instance();
+    $emailit->register_tab(
+        'my_custom_tab',      // Tab ID
+        'My Tab',             // Tab label
+        'my_tab_callback',    // Render callback function
+        50                    // Position (lower = earlier)
+    );
+});
+
+function my_tab_callback() {
+    echo '&lt;div class="card"&gt;Your tab content here&lt;/div&gt;';
+}</code></pre>
+
+                <h3>Checking API Status</h3>
+                <pre><code>if (EmailItMailer::is_api_active()) {
+    // API is connected and working
+}</code></pre>
+
+                <h3>Getting Sending Domains</h3>
+                <pre><code>$emailit = EmailItMailer::get_instance();
+$domains = $emailit->get_sending_domains();
+// Returns array: ['domain1.com', 'domain2.com']</code></pre>
+            </div>
+
+            <div class="card">
+                <h2>Frequently Asked Questions</h2>
+
+                <h3>Does this work with contact form plugins?</h3>
+                <p>Yes! EmailIt Mailer is compatible with any plugin that uses WordPress's standard <code>wp_mail()</code> function, including Contact Form 7, WPForms, Gravity Forms, and more.</p>
+
+                <h3>Can I use multiple sending domains?</h3>
+                <p>Yes. Add multiple domains in your EmailIt account, and they'll all be available in the plugin. The default domain is set in Settings, but other plugins can override it using the <code>wp_mail_from</code> filter.</p>
+
+                <h3>Why are emails queued instead of sent immediately?</h3>
+                <p>Asynchronous sending prevents your website from slowing down, especially when sending bulk emails. The email is queued and sent within seconds via WordPress cron.</p>
+
+                <h3>How do I track email delivery?</h3>
+                <p>Use your <a href="https://emailit.com/dashboard" target="_blank">EmailIt Dashboard</a> to view delivery statistics, open rates, click rates, and bounces.</p>
+
+                <h3>What happens if the API is down?</h3>
+                <p>If the API cannot be reached, the email will be logged as "failed" and you'll see an error in the debug log. The plugin will display a notice in the admin area when the API connection fails.</p>
+            </div>
+
+            <div class="card">
+                <h2>Support</h2>
+                <p>For support and bug reports:</p>
+                <ul>
+                    <li><strong>GitHub Issues:</strong> <a href="https://github.com/chalamministries/EmailitWP/issues" target="_blank">Report a bug or request a feature</a></li>
+                    <li><strong>EmailIt Support:</strong> <a href="https://emailit.com/support" target="_blank">Contact EmailIt support</a></li>
+                    <li><strong>Documentation:</strong> <a href="https://emailit.com/docs" target="_blank">Full API documentation</a></li>
+                </ul>
+            </div>
         </div>
         <?php
     }
