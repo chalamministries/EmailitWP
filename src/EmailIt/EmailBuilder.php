@@ -29,6 +29,18 @@ class EmailBuilder
 		$this->emailArr['reply_to'] = $replyTo;
 		return $this;
 	}
+
+	public function cc($cc): self
+	{
+		$this->emailArr['cc'] = $cc;
+		return $this;
+	}
+
+	public function bcc($bcc): self
+	{
+		$this->emailArr['bcc'] = $bcc;
+		return $this;
+	}
 	
 	public function subject(string $subject): self
 	{
