@@ -33,7 +33,7 @@ class SendingDomainManager
 			$params['filter']['name'] = $nameFilter;
 		}
 
-		return $this->client->request('GET', '/sending-domains', $params);
+		return $this->client->request('GET', '/domains', $params);
 	}
 
 	/**
@@ -44,7 +44,7 @@ class SendingDomainManager
 	 */
 	public function create(string $name): array
 	{
-		return $this->client->request('POST', '/sending-domains', [
+		return $this->client->request('POST', '/domains', [
 			'name' => $name
 		]);
 	}
@@ -57,7 +57,7 @@ class SendingDomainManager
 	 */
 	public function get(string $id): array
 	{
-		return $this->client->request('GET', "/sending-domains/{$id}");
+		return $this->client->request('GET', "/domains/{$id}");
 	}
 
 	/**
@@ -68,7 +68,7 @@ class SendingDomainManager
 	 */
 	public function checkDns(string $id): array
 	{
-		return $this->client->request('POST', "/sending-domains/{$id}/check");
+		return $this->client->request('POST', "/domains/{$id}/check");
 	}
 
 	/**
@@ -79,7 +79,7 @@ class SendingDomainManager
 	 */
 	public function delete(string $id): bool
 	{
-		$this->client->request('DELETE', "/sending-domains/{$id}");
+		$this->client->request('DELETE', "/domains/{$id}");
 		return true;
 	}
 }
