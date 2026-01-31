@@ -14,16 +14,16 @@ class AudienceManager
 	/**
 	 * List all audiences with optional filtering and pagination
 	 * 
-	 * @param int $perPage Number of audiences per page (default: 25)
+	 * @param int $limit Number of audiences per page (default: 25)
 	 * @param int $page Page number
 	 * @param string|null $nameFilter Filter audiences by name
 	 * @return array
 	 */
-	public function list(int $perPage = 25, int $page = 1, ?string $nameFilter = null): array
+	public function list(int $limit = 25, int $page = 1, ?string $nameFilter = null): array
 	{
 		$params = [
-			'per_page' => $perPage,
-			'page' => $page
+			'limit' => max(1, $limit),
+			'page' => max(1, $page)
 		];
 
 		if ($nameFilter) {
@@ -83,33 +83,4 @@ class AudienceManager
 		return true;
 	}
 
-	/**
-	 * Subscribe an email address to an audience
-	 * 
-	 * @param string $token Audience subscription token
-	 * @param string $email Subscriber's email address
-	 * @param string $firstName Subscriber's first name
-	 * @param string $lastName Subscriber's last name
-	 * @param array $customFields Optional custom fields
-	 * @return array
-	 */
-	public function subscribe(
-		string $token,
-		string $email,
-		string $firstName,
-		string $lastName,
-		array $customFields = []
-	): array {
-		$params = [
-			'email' => $email,
-			'first_name' => $firstName,
-			'last_name' => $lastName
-		];
-
-		if (!empty($customFields)) {
-			$params['custom_fields'] = $customFields;
-		}
-
-		return $this->client->request('POST', "/audiences/subscribe/{$token}", $params);
-	}
 }

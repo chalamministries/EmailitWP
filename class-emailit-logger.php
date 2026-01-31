@@ -71,6 +71,7 @@ class EmailIt_Logger {
 				email_to longtext NOT NULL,
 				recipient_count int(11) NOT NULL DEFAULT 1,
 				source varchar(50) DEFAULT NULL,
+				emailit_email_id varchar(128) DEFAULT NULL,
 				html_content longtext DEFAULT NULL,
 				created_at datetime NOT NULL,
 				sent_at datetime DEFAULT NULL,
@@ -89,6 +90,11 @@ class EmailIt_Logger {
 			$column_exists = $wpdb->get_results("SHOW COLUMNS FROM {$table_name} LIKE 'error_message'");
 			if (empty($column_exists)) {
 				$wpdb->query("ALTER TABLE {$table_name} ADD COLUMN error_message text DEFAULT NULL");
+			}
+
+			$column_exists = $wpdb->get_results("SHOW COLUMNS FROM {$table_name} LIKE 'emailit_email_id'");
+			if (empty($column_exists)) {
+				$wpdb->query("ALTER TABLE {$table_name} ADD COLUMN emailit_email_id varchar(128) DEFAULT NULL AFTER source");
 			}
 		}
 	}
@@ -126,12 +132,13 @@ class EmailIt_Logger {
 				'email_to' => $to_serialized,
 				'recipient_count' => $recipient_count,
 				'source' => $source,
+				'emailit_email_id' => isset($args['emailit_email_id']) ? $args['emailit_email_id'] : null,
 				'html_content' => $args['message'],
 				'created_at' => current_time('mysql'),
 				'status' => 'pending'
 			],
 			[
-				'%s', '%s', '%s', '%d', '%s', '%s', '%s', '%s'
+				'%s', '%s', '%s', '%d', '%s', '%s', '%s', '%s', '%s'
 			]
 		);
 		
@@ -244,9 +251,11 @@ class EmailIt_Logger {
 	 * 
 	 * @param int $log_id The ID of the log entry
 	 * @param string $status The new status ('sent' or 'failed')
+	 * @param string $error_message Optional error context
+	 * @param array $context Additional metadata (e.g., ['email_id' => '...'])
 	 * @return bool Whether the update was successful
 	 */
-	public function update_email_status($log_id, $status = 'sent', $error_message = '') {
+	public function update_email_status($log_id, $status = 'sent', $error_message = '', array $context = []) {
 		global $wpdb;
 		
 		$data = [
@@ -259,6 +268,11 @@ class EmailIt_Logger {
 		// Add error message if provided
 		if ($status === 'failed' && !empty($error_message)) {
 			$data['error_message'] = $error_message;
+			$format[] = '%s';
+		}
+		
+		if (!empty($context['email_id'])) {
+			$data['emailit_email_id'] = $context['email_id'];
 			$format[] = '%s';
 		}
 		
@@ -529,6 +543,7 @@ class EmailIt_Logger {
 								<th scope="col" class="manage-column">From</th>
 								<th scope="col" class="manage-column">To</th>
 								<th scope="col" class="manage-column">Source</th>
+                                    <th scope="col" class="manage-column">EmailIt ID</th>
 								<th scope="col" class="manage-column">Status</th>
 								<th scope="col" class="manage-column">Actions</th>
 							</tr>
@@ -537,10 +552,11 @@ class EmailIt_Logger {
 						<tbody id="the-list">
 							<?php if (empty($logs)): ?>
 								<tr>
-									<td colspan="8">No logs found.</td>
+									<td colspan="9">No logs found.</td>
 								</tr>
 							<?php else: ?>
 								<?php foreach ($logs as $log): ?>
+					<?php $log_email_id = !empty($log->emailit_email_id) ? $log->emailit_email_id : ''; ?>
 									<tr>
 										<th scope="row" class="check-column">
 											<input type="checkbox" name="log_ids[]" value="<?php echo esc_attr($log->id); ?>">

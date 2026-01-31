@@ -3,7 +3,7 @@
 Plugin Name: EmailIt Mailer for WordPress
 Plugin URI: https://github.com/chalamministries/EmailitWP
 Description: Overrides WordPress default mail function to use EmailIt SDK
-Version: 3.1.1
+Version: 3.2.1
 Author: Steven Gauerke
 License: GPL2
 */
@@ -134,12 +134,25 @@ class EmailItMailer {
     
         try {
             $client = new EmailIt\EmailItClient($this->options['api_key']);
-            $response = $client->sendingDomains()->list(100, 1);
+            $response = $client->domains()->list(100, 1);
             
+            $domainItems = [];
             if (isset($response['data']) && is_array($response['data'])) {
-                $domains = array_map(function($domain) {
-                    return $domain['name'];
-                }, $response['data']);
+                $domainItems = $response['data'];
+            } elseif (isset($response['items']) && is_array($response['items'])) {
+                $domainItems = $response['items'];
+            } elseif (isset($response['domains']) && is_array($response['domains'])) {
+                $domainItems = $response['domains'];
+            }
+
+            if (!empty($domainItems)) {
+                $domains = array_values(array_filter(array_map(function($domain) {
+                    if (is_array($domain) && isset($domain['name'])) {
+                        return $domain['name'];
+                    }
+
+                    return is_string($domain) ? $domain : null;
+                }, $domainItems)));
                 
                 $this->update_sending_domains($domains);
                 
@@ -757,6 +770,110 @@ $domains = $emailit->get_sending_domains();
         
         return $args;
     }
+
+    private function normalize_recipient_list($recipients): array
+    {
+        if (empty($recipients)) {
+            return [];
+        }
+
+        if (!is_array($recipients)) {
+            $recipients = strpos($recipients, ',') !== false
+                ? array_map('trim', explode(',', $recipients))
+                : [trim($recipients)];
+        } else {
+            $recipients = array_map(function ($recipient) {
+                if (is_string($recipient)) {
+                    return trim($recipient);
+                }
+
+                if (is_array($recipient)) {
+                    $email = isset($recipient['email']) ? trim((string) $recipient['email']) : '';
+                    if ($email === '') {
+                        return '';
+                    }
+
+                    $name = isset($recipient['name']) ? trim((string) $recipient['name']) : '';
+                    return $name !== '' ? sprintf('%s <%s>', $name, $email) : $email;
+                }
+
+                return '';
+            }, $recipients);
+        }
+
+        $normalized = [];
+        $seen = [];
+
+        foreach ($recipients as $recipient) {
+            if (!is_string($recipient)) {
+                continue;
+            }
+
+            $recipient = trim($recipient);
+            if ($recipient === '') {
+                continue;
+            }
+
+            $email = $this->extract_email_address($recipient);
+            if ($email === '') {
+                continue;
+            }
+
+            $key = strtolower($email);
+            if (isset($seen[$key])) {
+                continue;
+            }
+
+            $seen[$key] = true;
+            $normalized[] = $recipient;
+        }
+
+        return $normalized;
+    }
+
+    private function extract_email_address(string $recipient): string
+    {
+        if (preg_match('/<([^>]+)>/', $recipient, $matches)) {
+            return sanitize_email(trim($matches[1]));
+        }
+
+        return sanitize_email(trim($recipient));
+    }
+
+    private function extract_emailit_message_id($response): ?string
+    {
+        if (!is_array($response) || empty($response)) {
+            return null;
+        }
+
+        $keys = ['email_id', 'id', 'message_id', 'uuid'];
+        foreach ($keys as $key) {
+            $value = $this->recursive_find_value($response, $key);
+            if ($value !== null && $value !== '') {
+                return (string) $value;
+            }
+        }
+
+        return null;
+    }
+
+    private function recursive_find_value(array $data, string $key)
+    {
+        if (array_key_exists($key, $data) && $data[$key] !== null && $data[$key] !== '') {
+            return $data[$key];
+        }
+
+        foreach ($data as $value) {
+            if (is_array($value)) {
+                $found = $this->recursive_find_value($value, $key);
+                if ($found !== null && $found !== '') {
+                    return $found;
+                }
+            }
+        }
+
+        return null;
+    }
    
   public function send_mail_async($args) {
      $this->log_debug('Entering send_mail_async', $args);
@@ -953,88 +1070,123 @@ $domains = $emailit->get_sending_domains();
 
         // Add BCC recipients if provided (used for batch sending)
         if (!empty($args['bcc'])) {
-            $email->bcc($args['bcc']);
+            $bccRecipients = $this->normalize_recipient_list($args['bcc']);
+            if (!empty($bccRecipients)) {
+                $email->bcc($bccRecipients);
+            }
         }
 
         // Add CC recipients if provided
         if (!empty($args['cc'])) {
-            $email->cc($args['cc']);
+            $ccRecipients = $this->normalize_recipient_list($args['cc']);
+            if (!empty($ccRecipients)) {
+                $email->cc($ccRecipients);
+            }
         }
 
-        // Process recipients
+        $normalizedTo = $this->normalize_recipient_list($args['to'] ?? []);
+        if (empty($normalizedTo)) {
+            $error_message = 'No valid recipients found for EmailIt send.';
+            $this->log_debug($error_message, $args);
+
+            if ($log_id) {
+                $logger = EmailIt_Logger::get_instance();
+                $logger->update_email_status($log_id, 'failed', $error_message);
+            }
+
+            return false;
+        }
+
+        $this->log_debug('Normalized recipients before send', $normalizedTo);
+
         try {
-                $to = $args['to'];
-                 
-                 $this->log_debug("just before send: " . json_encode($args['to']));
-                 
-                 $success = true;
-                 $error_message = '';
-                 
-                 if (is_array($to)) {
-                     // Send individual email to each recipient
-                     foreach ($to as $recipient) {
-                         $email->to($recipient);
-                         
-                         try {
-                             $result = $email->send();
-                             if (!$result) {
-                                 $success = false;
-                                 $error_message = 'Unknown error from EmailIt API. Send method returned false.';
-                                 break;
-                             }
-                         } catch (Exception $e) {
-                             $success = false;
-                             $error_message = $e->getMessage() . "\n==DEBUG== " . json_encode($headers);
-                             $this->log_debug('Error sending to ' . $recipient . ': ' . $error_message);
-                             break; // Stop on first error
-                         }
-                     }
-                 } else {
-                     // Single recipient
-                     $email->to($to);
-                     
-                     try {
-                         $result = $email->send();
-                         if (!$result) {
-                             $success = false;
-                             $error_message = 'Unknown error from EmailIt API. Send method returned false.';
-                         }
-                     } catch (Exception $e) {
-                         $success = false;
-                         $error_message = $e->getMessage() . "\n==DEBUG== " . json_encode($headers);
-                         $this->log_debug('Error sending to ' . $to . ': ' . $error_message);
-                     }
-                 }
-                 
-                 // Update log status
-                 if ($log_id) {
-                     $logger = EmailIt_Logger::get_instance();
-                     $logger->update_email_status($log_id, $success ? 'sent' : 'failed', $error_message);
-                 }
-         
-                 $this->log_debug($success ? 'Async email sent successfully via EmailIt SDK' : 'Failed to send email: ' . $error_message);
-                 
-                 return $success;
-             } catch (Exception $e) {
-                 $error_message = $e->getMessage();
-                 $this->log_debug('Exception in send_mail_async: ' . $error_message);
-                 if ($log_id) {
-                     $logger = EmailIt_Logger::get_instance();
-                     $logger->update_email_status($log_id, 'failed', $error_message);
-                 }
-                 
-                 return false;
-             }
-         } catch (Exception $e) {
-             $error_message = $e->getMessage();
-             $this->log_debug('Exception in send_mail_async: ' . $error_message);
-             if ($log_id) {
-                 $logger = EmailIt_Logger::get_instance();
-                 $logger->update_email_status($log_id, 'failed', $error_message);
-             }
-             
-             return false;
-         }
+                $success = true;
+                $error_message = '';
+                $deliveredEmailIds = [];
+
+                if (count($normalizedTo) > 1) {
+                    // Send individual email to each recipient
+                    foreach ($normalizedTo as $recipient) {
+                        $email->to($recipient);
+
+                        try {
+                            $result = $email->send();
+                            if (empty($result)) {
+                                $success = false;
+                                $error_message = 'Unknown error from EmailIt API. Empty response received.';
+                                break;
+                            }
+
+                            $emailId = $this->extract_emailit_message_id($result);
+                            if ($emailId) {
+                                $deliveredEmailIds[] = $emailId;
+                            }
+                        } catch (Exception $e) {
+                            $success = false;
+                            $error_message = $e->getMessage() . "\n==DEBUG== " . json_encode($headers);
+                            $this->log_debug('Error sending to ' . $recipient . ': ' . $error_message);
+                            break; // Stop on first error
+                        }
+                    }
+                } else {
+                    // Single recipient
+                    $recipient = $normalizedTo[0];
+                    $email->to($recipient);
+
+                    try {
+                        $result = $email->send();
+                        if (empty($result)) {
+                            $success = false;
+                            $error_message = 'Unknown error from EmailIt API. Empty response received.';
+                        } else {
+                            $emailId = $this->extract_emailit_message_id($result);
+                            if ($emailId) {
+                                $deliveredEmailIds[] = $emailId;
+                            }
+                        }
+                    } catch (Exception $e) {
+                        $success = false;
+                        $error_message = $e->getMessage() . "\n==DEBUG== " . json_encode($headers);
+                        $this->log_debug('Error sending to ' . $recipient . ': ' . $error_message);
+                    }
+                }
+
+                // Update log status
+                if ($log_id) {
+                    $logger = EmailIt_Logger::get_instance();
+                    $logger->update_email_status(
+                        $log_id,
+                        $success ? 'sent' : 'failed',
+                        $error_message,
+                        [
+                            'email_id' => empty($deliveredEmailIds) ? null : implode(',', array_unique($deliveredEmailIds))
+                        ]
+                    );
+                }
+
+                $this->log_debug($success ? 'Async email sent successfully via EmailIt SDK' : 'Failed to send email: ' . $error_message);
+
+                return $success;
+            } catch (Exception $e) {
+                $error_message = $e->getMessage();
+                $this->log_debug('Exception in send_mail_async: ' . $error_message);
+                if ($log_id) {
+                    $logger = EmailIt_Logger::get_instance();
+                    $logger->update_email_status($log_id, 'failed', $error_message);
+                }
+
+                return false;
+            }
+        } catch (Exception $e) {
+            $error_message = $e->getMessage();
+            $this->log_debug('Exception in send_mail_async: ' . $error_message);
+            if ($log_id) {
+                $logger = EmailIt_Logger::get_instance();
+                $logger->update_email_status($log_id, 'failed', $error_message);
+            }
+            
+            return false;
+        }
   }
   
 
