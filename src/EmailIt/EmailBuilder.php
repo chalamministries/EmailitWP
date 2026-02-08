@@ -2,321 +2,413 @@
 
 namespace EmailIt;
 
+/**
+ * Fluent builder for composing EmailIt messages, supporting To/CC/BCC recipients,
+ * attachments, scheduling, tagging, metadata, and lifecycle helpers.
+ */
 class EmailBuilder
 {
-	private array $emailArr = [];
-	private EmailItClient $client;
+    private array $payload = [];
+    private EmailItClient $client;
 
-	public function __construct(EmailItClient $client)
-	{
-		$this->client = $client;
-	}
+    public function __construct(EmailItClient $client)
+    {
+        $this->client = $client;
+    }
 
-	public function from(string $from): self
-	{
-		$this->emailArr['from'] = $from;
-		return $this;
-	}
+    /**
+     * Reset the current message payload.
+     */
+    public function reset(): self
+    {
+        $this->payload = [];
 
-	/**
-	 * @param string|array $to
-	 */
-	public function to($to): self
-	{
-		$this->setAddresses('to', $to);
-		return $this;
-	}
+        return $this;
+    }
 
-	public function replyTo(string $replyTo): self
-	{
-		$this->emailArr['reply_to'] = $replyTo;
-		return $this;
-	}
+    public function from(string $from): self
+    {
+        $this->payload['from'] = $from;
 
-	/**
-	 * @param string|array $cc
-	 */
-	public function cc($cc): self
-	{
-		$this->setAddresses('cc', $cc);
-		return $this;
-	}
+        return $this;
+    }
 
-	/**
-	 * @param string|array $cc
-	 */
-	public function addCc($cc): self
-	{
-		$this->setAddresses('cc', $cc, true);
-		return $this;
-	}
+    /**
+     * Set the primary recipients. Accepts a single string email address, a list of addresses,
+     * or an array of structured recipient objects per the EmailIt API specification.
+     * Subsequent calls overwrite the existing list; use addTo() to append.
+     *
+     * @param mixed $to
+     */
+    public function to($to): self
+    {
+        $this->payload['to'] = $this->normalizeRecipients($to);
 
-	/**
-	 * @param string|array $bcc
-	 */
-	public function bcc($bcc): self
-	{
-		$this->setAddresses('bcc', $bcc);
-		return $this;
-	}
+        return $this;
+    }
 
-	/**
-	 * @param string|array $bcc
-	 */
-	public function addBcc($bcc): self
-	{
-		$this->setAddresses('bcc', $bcc, true);
-		return $this;
-	}
+    /**
+     * Append additional primary recipients.
+     *
+     * @param mixed $to
+     */
+    public function addTo($to): self
+    {
+        $existing = isset($this->payload['to']) ? $this->payload['to'] : [];
+        $this->payload['to'] = $this->normalizeRecipients($to, $existing);
 
-	public function subject(string $subject): self
-	{
-		$this->emailArr['subject'] = $subject;
-		return $this;
-	}
+        return $this;
+    }
 
-	public function html(string $html): self
-	{
-		$this->emailArr['html'] = $html;
-		return $this;
-	}
+    /**
+     * Set the CC recipients. Accepts the same formats as to().
+     *
+     * @param mixed $cc
+     */
+    public function cc($cc): self
+    {
+        $this->payload['cc'] = $this->normalizeRecipients($cc);
 
-	public function text(string $text): self
-	{
-		$this->emailArr['text'] = $text;
-		return $this;
-	}
+        return $this;
+    }
 
-	public function addAttachment(string $filename, string $content, string $contentType): self
-	{
-		if (!isset($this->emailArr['attachments'])) {
-			$this->emailArr['attachments'] = [];
-		}
+    /**
+     * Append additional CC recipients.
+     *
+     * @param mixed $cc
+     */
+    public function addCc($cc): self
+    {
+        $existing = isset($this->payload['cc']) ? $this->payload['cc'] : [];
+        $this->payload['cc'] = $this->normalizeRecipients($cc, $existing);
 
-		$this->emailArr['attachments'][] = [
-			'filename' => $filename,
-			'content' => $content,
-			'content_type' => $contentType,
-		];
+        return $this;
+    }
 
-		return $this;
-	}
+    /**
+     * Set the BCC recipients. Accepts the same formats as to().
+     *
+     * @param mixed $bcc
+     */
+    public function bcc($bcc): self
+    {
+        $this->payload['bcc'] = $this->normalizeRecipients($bcc);
 
-	public function addHeader(string $name, string $value): self
-	{
-		if (!isset($this->emailArr['headers'])) {
-			$this->emailArr['headers'] = [];
-		}
+        return $this;
+    }
 
-		$this->emailArr['headers'][$name] = $value;
-		return $this;
-	}
+    /**
+     * Append additional BCC recipients.
+     *
+     * @param mixed $bcc
+     */
+    public function addBcc($bcc): self
+    {
+        $existing = isset($this->payload['bcc']) ? $this->payload['bcc'] : [];
+        $this->payload['bcc'] = $this->normalizeRecipients($bcc, $existing);
 
-	public function send(): array
-	{
-		return $this->client->sendEmail($this->emailArr);
-	}
+        return $this;
+    }
 
-	public function get(string $emailId): array
-	{
-		return $this->client->getEmail($emailId);
-	}
+    public function replyTo(string $replyTo): self
+    {
+        $this->payload['reply_to'] = $replyTo;
 
-	public function update(string $emailId, array $payload = []): array
-	{
-		$updatePayload = $payload ?: $this->emailArr;
+        return $this;
+    }
 
-		if (empty($updatePayload)) {
-			throw new EmailItException('No email payload available to update.');
-		}
+    public function subject(string $subject): self
+    {
+        $this->payload['subject'] = $subject;
 
-		return $this->client->updateEmail($emailId, $updatePayload);
-	}
+        return $this;
+    }
 
-	public function cancel(string $emailId): array
-	{
-		return $this->client->cancelEmail($emailId);
-	}
+    public function html(string $html): self
+    {
+        $this->payload['html'] = $html;
 
-	public function retry(string $emailId): array
-	{
-		return $this->client->retryEmail($emailId);
-	}
+        return $this;
+    }
 
-	public function getPayload(): array
-	{
-		return $this->emailArr;
-	}
+    public function text(string $text): self
+    {
+        $this->payload['text'] = $text;
 
-	public function resetPayload(): self
-	{
-		$this->emailArr = [];
-		return $this;
-	}
+        return $this;
+    }
 
-	/**
-	 * @param string $field
-	 * @param mixed $addresses
-	 * @param bool $merge
-	 */
-	private function setAddresses(string $field, $addresses, bool $merge = false): void
-	{
-		$normalized = $this->normalizeAddressList($addresses);
+    /**
+     * Schedule the email for a specific ISO8601 timestamp.
+     *
+     * @param mixed $dateTime String timestamp or DateTimeInterface instance.
+     */
+    public function scheduledAt($dateTime): self
+    {
+        if ($dateTime instanceof \DateTimeInterface) {
+            $dateTime = $dateTime->format(DATE_ATOM);
+        }
 
-		if ($merge && isset($this->emailArr[$field])) {
-			$existing = $this->normalizeAddressList($this->emailArr[$field]);
-			$normalized = $this->mergeAddressLists($existing, $normalized);
-		}
+        if (!is_string($dateTime)) {
+            throw new EmailItException('scheduledAt expects a string or DateTimeInterface instance.');
+        }
 
-		if (empty($normalized)) {
-			unset($this->emailArr[$field]);
-			return;
-		}
+        $this->payload['scheduled_at'] = $dateTime;
 
-		$this->emailArr[$field] = $this->formatAddressField($normalized);
-	}
+        return $this;
+    }
 
-	/**
-	 * @param array $addresses
-	 * @return mixed
-	 */
-	private function formatAddressField(array $addresses)
-	{
-		return count($addresses) === 1 ? $addresses[0] : $addresses;
-	}
+    public function metadata(array $metadata): self
+    {
+        $this->payload['metadata'] = $metadata;
 
-	private function mergeAddressLists(array $existing, array $incoming): array
-	{
-		if (empty($existing)) {
-			return $incoming;
-		}
+        return $this;
+    }
 
-		$merged = $existing;
-		$seen = [];
+    public function addMetadata(string $key, $value): self
+    {
+        if (!isset($this->payload['metadata']) || !is_array($this->payload['metadata'])) {
+            $this->payload['metadata'] = [];
+        }
 
-		foreach ($existing as $entry) {
-			$identifier = $this->addressKey($entry);
-			if ($identifier !== '') {
-				$seen[$identifier] = true;
-			}
-		}
+        $this->payload['metadata'][$key] = $value;
 
-		foreach ($incoming as $entry) {
-			$identifier = $this->addressKey($entry);
-			if ($identifier === '' || isset($seen[$identifier])) {
-				continue;
-			}
+        return $this;
+    }
 
-			$seen[$identifier] = true;
-			$merged[] = $entry;
-		}
+    public function tags(array $tags): self
+    {
+        $existing = isset($this->payload['tags']) && is_array($this->payload['tags']) ? $this->payload['tags'] : [];
+        $this->payload['tags'] = array_values(array_unique(array_merge($existing, $tags)));
 
-		return $merged;
-	}
+        return $this;
+    }
 
-	private function normalizeAddressList($addresses): array
-	{
-		if ($addresses === null) {
-			return [];
-		}
+    public function addTag(string $tag): self
+    {
+        return $this->tags([$tag]);
+    }
 
-		if (!is_array($addresses)) {
-			if (is_string($addresses)) {
-				$addresses = $this->splitAddressString($addresses);
-			} else {
-				return [];
-			}
-		}
+    /**
+     * Enable or disable load/click tracking.
+     */
+    public function tracking(bool $loads = true, bool $clicks = true): self
+    {
+        $this->payload['tracking'] = [
+            'loads' => (bool) $loads,
+            'clicks' => (bool) $clicks,
+        ];
 
-		$normalized = [];
-		$seen = [];
+        return $this;
+    }
 
-		foreach ($addresses as $address) {
-			if (is_string($address)) {
-				$formatted = trim($address);
-				if ($formatted === '') {
-					continue;
-				}
+    /**
+     * Assign custom tracking options directly.
+     */
+    public function trackingOptions(array $options): self
+    {
+        $defaults = ['loads' => false, 'clicks' => false];
+        $this->payload['tracking'] = array_merge($defaults, array_intersect_key($options, $defaults));
 
-				$identifier = strtolower($this->extractEmail($formatted));
-				if ($identifier === '' || isset($seen[$identifier])) {
-					continue;
-				}
+        return $this;
+    }
 
-				$seen[$identifier] = true;
-				$normalized[] = $formatted;
-			} elseif (is_array($address)) {
-				if (empty($address['email'])) {
-					continue;
-				}
+    public function addAttachment(string $filename, string $content, string $contentType): self
+    {
+        if (!isset($this->payload['attachments'])) {
+            $this->payload['attachments'] = [];
+        }
 
-				$email = trim((string) $address['email']);
-				if ($email === '') {
-					continue;
-				}
+        $this->payload['attachments'][] = [
+            'filename' => $filename,
+            'content' => $content,
+            'content_type' => $contentType,
+        ];
 
-				$identifier = strtolower($email);
-				if (isset($seen[$identifier])) {
-					continue;
-				}
+        return $this;
+    }
 
-				$seen[$identifier] = true;
+    public function addHeader(string $name, string $value): self
+    {
+        if (!isset($this->payload['headers'])) {
+            $this->payload['headers'] = [];
+        }
 
-				$entry = ['email' => $email];
+        $this->payload['headers'][$name] = $value;
 
-				if (isset($address['name']) && is_string($address['name'])) {
-					$name = trim($address['name']);
-					if ($name !== '') {
-						$entry['name'] = $name;
-					}
-				}
+        return $this;
+    }
 
-				foreach ($address as $key => $value) {
-					if (in_array($key, ['email', 'name'], true)) {
-						continue;
-					}
-					$entry[$key] = $value;
-				}
+    /**
+     * Dispatch the email via POST /emails.
+     */
+    public function send(): array
+    {
+        $payload = $this->preparePayload($this->payload);
 
-				$normalized[] = $entry;
-			}
-		}
+        return $this->client->sendEmail($payload);
+    }
 
-		return $normalized;
-	}
+    /**
+     * Retrieve an email resource by ID.
+     */
+    public function get(string $emailId): array
+    {
+        return $this->client->getEmail($emailId);
+    }
 
-	private function splitAddressString(string $addresses): array
-	{
-		if (strpos($addresses, ',') === false) {
-			return [$addresses];
-		}
+    /**
+     * Update a scheduled email. If no payload is supplied, the builder payload is used.
+     */
+    public function update(string $emailId, array $payload = []): array
+    {
+        $data = !empty($payload) ? $payload : $this->payload;
+        $prepared = $this->preparePayload($data);
 
-		$parts = array_map('trim', explode(',', $addresses));
-		return array_values(array_filter($parts, static fn($part) => $part !== ''));
-	}
+        return $this->client->updateEmail($emailId, $prepared);
+    }
 
-	private function extractEmail(string $address): string
-	{
-		if (preg_match('/<([^>]+)>/', $address, $matches)) {
-			return trim($matches[1]);
-		}
+    /**
+     * Cancel a scheduled email.
+     */
+    public function cancel(string $emailId): array
+    {
+        return $this->client->cancelEmail($emailId);
+    }
 
-		return trim($address);
-	}
+    /**
+     * Retry a failed email.
+     */
+    public function retry(string $emailId): array
+    {
+        return $this->client->retryEmail($emailId);
+    }
 
-	/**
-	 * @param mixed $entry
-	 */
-	private function addressKey($entry): string
-	{
-		if (is_array($entry)) {
-			return strtolower(trim((string) ($entry['email'] ?? '')));
-		}
+    /**
+     * Export the current message payload (normalized) without sending.
+     */
+    public function toArray(): array
+    {
+        return $this->preparePayload($this->payload);
+    }
 
-		if (is_string($entry)) {
-			return strtolower($this->extractEmail($entry));
-		}
+    private function preparePayload(array $payload): array
+    {
+        foreach (['to', 'cc', 'bcc'] as $field) {
+            if (array_key_exists($field, $payload)) {
+                $normalizedRecipients = $this->normalizeRecipients($payload[$field]);
 
-		return '';
-	}
+                if (!empty($normalizedRecipients)) {
+                    $payload[$field] = $normalizedRecipients;
+                } else {
+                    unset($payload[$field]);
+                }
+            }
+        }
+
+        if (isset($payload['tracking'])) {
+            $payload['tracking'] = $this->normalizeTracking($payload['tracking']);
+        }
+
+        if (isset($payload['tags']) && is_array($payload['tags'])) {
+            $payload['tags'] = array_values(array_unique($payload['tags']));
+        }
+
+        if (isset($payload['scheduled_at']) && $payload['scheduled_at'] instanceof \DateTimeInterface) {
+            $payload['scheduled_at'] = $payload['scheduled_at']->format(DATE_ATOM);
+        }
+
+        return $payload;
+    }
+
+    private function normalizeTracking($tracking): array
+    {
+        if (!is_array($tracking)) {
+            $enabled = (bool) $tracking;
+
+            return [
+                'loads' => $enabled,
+                'clicks' => $enabled,
+            ];
+        }
+
+        return [
+            'loads' => isset($tracking['loads']) ? (bool) $tracking['loads'] : false,
+            'clicks' => isset($tracking['clicks']) ? (bool) $tracking['clicks'] : false,
+        ];
+    }
+
+    private function normalizeRecipients($recipients, $existing = []): array
+    {
+        $merged = array_merge(
+            $this->recipientList($existing),
+            $this->recipientList($recipients)
+        );
+
+        $normalized = [];
+
+        foreach ($merged as $recipient) {
+            if (is_array($recipient)) {
+                if (!$this->containsArray($normalized, $recipient)) {
+                    $normalized[] = $recipient;
+                }
+                continue;
+            }
+
+            if (!is_string($recipient)) {
+                continue;
+            }
+
+            $trimmed = trim($recipient);
+
+            if ($trimmed === '') {
+                continue;
+            }
+
+            if (!in_array($trimmed, $normalized, true)) {
+                $normalized[] = $trimmed;
+            }
+        }
+
+        return $normalized;
+    }
+
+    private function recipientList($value): array
+    {
+        if ($value === null) {
+            return [];
+        }
+
+        if (is_array($value)) {
+            if ($this->isAssoc($value)) {
+                return [$value];
+            }
+
+            return array_values($value);
+        }
+
+        $value = trim((string) $value);
+
+        if ($value === '') {
+            return [];
+        }
+
+        return [$value];
+    }
+
+    private function containsArray(array $haystack, array $needle): bool
+    {
+        foreach ($haystack as $item) {
+            if (is_array($item) && $item == $needle) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function isAssoc(array $array): bool
+    {
+        return array_keys($array) !== range(0, count($array) - 1);
+    }
 }

@@ -7,28 +7,32 @@ class EmailItClient
 	private string $apiKey;
 	private string $baseUrl;
 	private array $headers;
-
+	
 	public function __construct(string $apiKey, string $baseUrl = 'https://api.emailit.com/v2')
 	{
 		$this->apiKey = $apiKey;
-		$this->baseUrl = rtrim($baseUrl, '/');
+		$this->baseUrl = $baseUrl;
 		$this->headers = [
 			'Authorization' => 'Bearer ' . $this->apiKey,
 			'Content-Type' => 'application/json',
-			'Accept' => 'application/json',
+			'Accept' => 'application/json'
 		];
 	}
-
+	
 	/**
-	 * Create an email message builder.
+	 * Create an email message builder
+	 * 
+	 * @return EmailBuilder
 	 */
 	public function email(): EmailBuilder
 	{
 		return new EmailBuilder($this);
 	}
-
+	
 	/**
-	 * Access the audience manager.
+	 * Create an audience manager instance
+	 * 
+	 * @return AudienceManager
 	 */
 	public function audiences(): AudienceManager
 	{
@@ -36,66 +40,100 @@ class EmailItClient
 	}
 
 	/**
-	 * Access the subscriber manager for a specific audience.
+	 * Access subscriber operations for a specific audience.
 	 */
 	public function audienceSubscribers(string $audienceId): AudienceSubscriberManager
 	{
 		return new AudienceSubscriberManager($this, $audienceId);
 	}
-
+	
 	/**
-	 * Access the API key manager.
+	 * Create an API key manager instance
+	 * 
+	 * @return ApiKeyManager
 	 */
 	public function apiKeys(): ApiKeyManager
 	{
 		return new ApiKeyManager($this);
 	}
-
+	
 	/**
+	 * Create a credential manager instance
+	 * 
 	 * @deprecated Use apiKeys() instead.
+	 * @return CredentialManager
 	 */
 	public function credentials(): CredentialManager
 	{
-		trigger_error(
-			'EmailItClient::credentials() is deprecated. Use EmailItClient::apiKeys() instead.',
-			E_USER_DEPRECATED
-		);
-
+		trigger_error('EmailItClient::credentials() is deprecated. Use EmailItClient::apiKeys() instead.', E_USER_DEPRECATED);
 		return new CredentialManager($this);
 	}
-
+	
 	/**
-	 * Access the domain manager.
+	 * Create a domain manager instance
+	 * 
+	 * @return DomainManager
 	 */
 	public function domains(): DomainManager
 	{
 		return new DomainManager($this);
 	}
-
+	
 	/**
+	 * Create a sending domain manager instance
+	 * 
 	 * @deprecated Use domains() instead.
+	 * @return SendingDomainManager
 	 */
-	public function sendingDomains(): DomainManager
+	public function sendingDomains(): SendingDomainManager
 	{
-		trigger_error(
-			'EmailItClient::sendingDomains() is deprecated. Use EmailItClient::domains() instead.',
-			E_USER_DEPRECATED
-		);
-
-		return new DomainManager($this);
+		trigger_error('EmailItClient::sendingDomains() is deprecated. Use EmailItClient::domains() instead.', E_USER_DEPRECATED);
+		return new SendingDomainManager($this);
+	}
+	
+	/**
+	 * Create a template manager instance
+	 *
+	 * @return TemplateManager
+	 */
+	public function templates(): TemplateManager
+	{
+		return new TemplateManager($this);
 	}
 
 	/**
-	 * Access the event manager.
+	 * Create a suppression manager instance
+	 *
+	 * @return SuppressionManager
+	 */
+	public function suppressions(): SuppressionManager
+	{
+		return new SuppressionManager($this);
+	}
+
+	/**
+	 * Create an email verification manager instance
+	 *
+	 * @return EmailVerificationManager
+	 */
+	public function emailVerifications(): EmailVerificationManager
+	{
+		return new EmailVerificationManager($this);
+	}
+
+	/**
+	 * Create an event manager instance
+	 * 
+	 * @return EventManager
 	 */
 	public function events(): EventManager
 	{
 		return new EventManager($this);
 	}
-
+	
 	/**
-	 * Perform an HTTP request against the EmailIt API.
-	 *
+	 * Make HTTP request to API
+	 * 
 	 * @param string $method
 	 * @param string $endpoint
 	 * @param array $params
@@ -104,26 +142,93 @@ class EmailItClient
 	 */
 	public function request(string $method, string $endpoint, array $params = []): array
 	{
-		$method = strtoupper($method);
-		$url = $this->buildUrl($endpoint, $method === 'GET' ? $params : []);
-
-		$options = [
+		$ch = curl_init();
+		
+		$normalizedMethod = strtoupper($method);
+		$url = $this->baseUrl . $endpoint;
+		
+		if ($normalizedMethod === 'GET' && !empty($params)) {
+			$queryString = http_build_query($params);
+			if ($queryString !== '') {
+				$url .= (strpos($url, '?') === false ? '?' : '&') . $queryString;
+			}
+		}
+		
+		curl_setopt_array($ch, [
 			CURLOPT_URL => $url,
 			CURLOPT_RETURNTRANSFER => true,
 			CURLOPT_ENCODING => '',
 			CURLOPT_MAXREDIRS => 10,
 			CURLOPT_TIMEOUT => 30,
 			CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
-			CURLOPT_CUSTOMREQUEST => $method,
+			CURLOPT_CUSTOMREQUEST => $normalizedMethod,
 			CURLOPT_HTTPHEADER => $this->formatHeaders(),
-		];
+		]);
+	
+		if ($normalizedMethod !== 'GET' && !empty($params)) {
+			curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($params));
+		}
+	
+		$response = curl_exec($ch);
+		$statusCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+		$error = curl_error($ch);
+		
+		curl_close($ch);
+	
+		if ($error) {
+			throw new EmailItException('API Request Error: ' . $error);
+		}
+	
+		$decodedResponse = json_decode($response, true);
+		
+		if ($statusCode >= 400) {
+			throw new EmailItException(
+				'API Error: ' . ($decodedResponse['message'] ?? 'Unknown error'),
+				$statusCode
+			);
+		}
+	
+		return $decodedResponse;
+	}
 
-		if ($method !== 'GET' && !empty($params)) {
-			$options[CURLOPT_POSTFIELDS] = json_encode($params);
+	/**
+	 * Make HTTP request to API and return raw response body.
+	 *
+	 * @param string $method
+	 * @param string $endpoint
+	 * @param array $params
+	 * @param array $headers
+	 * @return string
+	 * @throws EmailItException
+	 */
+	public function requestRaw(string $method, string $endpoint, array $params = [], array $headers = []): string
+	{
+		$ch = curl_init();
+
+		$normalizedMethod = strtoupper($method);
+		$url = $this->baseUrl . $endpoint;
+
+		if ($normalizedMethod === 'GET' && !empty($params)) {
+			$queryString = http_build_query($params);
+			if ($queryString !== '') {
+				$url .= (strpos($url, '?') === false ? '?' : '&') . $queryString;
+			}
 		}
 
-		$ch = curl_init();
-		curl_setopt_array($ch, $options);
+		curl_setopt_array($ch, [
+			CURLOPT_URL => $url,
+			CURLOPT_RETURNTRANSFER => true,
+			CURLOPT_ENCODING => '',
+			CURLOPT_MAXREDIRS => 10,
+			CURLOPT_TIMEOUT => 30,
+			CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+			CURLOPT_CUSTOMREQUEST => $normalizedMethod,
+			CURLOPT_HTTPHEADER => $this->formatHeaders($headers),
+		]);
+
+		if ($normalizedMethod !== 'GET' && !empty($params)) {
+			curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($params));
+		}
 
 		$response = curl_exec($ch);
 		$statusCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -135,39 +240,62 @@ class EmailItClient
 			throw new EmailItException('API Request Error: ' . $error);
 		}
 
-		$decodedResponse = null;
-		if ($response !== false && $response !== '') {
-			$decodedResponse = json_decode($response, true);
-		}
-
 		if ($statusCode >= 400) {
-			$message = null;
+			$decodedResponse = json_decode($response, true);
+			$message = is_array($decodedResponse)
+				? ($decodedResponse['message'] ?? 'Unknown error')
+				: (is_string($response) ? $response : 'Unknown error');
 
-			if (is_array($decodedResponse)) {
-				$message = $decodedResponse['message'] ?? null;
-			}
-
-			throw new EmailItException(
-				'API Error: ' . ($message ?? 'Unknown error'),
-				$statusCode
-			);
+			throw new EmailItException('API Error: ' . $message, $statusCode);
 		}
 
-		return is_array($decodedResponse) ? $decodedResponse : [];
+		return (string) $response;
 	}
-
+	
 	/**
-	 * Send an email via the /v2/emails endpoint.
+	 * Send a new email via the EmailIt API.
+	 *
+	 * @param array $params
+	 * @return array
+	 * @throws EmailItException
 	 */
-	public function sendEmail(array $payload): array
+	public function sendEmail(array $params): array
 	{
-		$this->validateEmailPayload($payload);
+		$requiredFields = ['from', 'to', 'subject'];
+		$this->validateRequired($params, $requiredFields);
 
-		return $this->request('POST', '/emails', $payload);
+		if (!isset($params['html']) && !isset($params['text'])) {
+			throw new EmailItException('Either html or text content must be provided');
+		}
+
+		if (isset($params['scheduled_at']) && $params['scheduled_at'] instanceof \DateTimeInterface) {
+			$params['scheduled_at'] = $params['scheduled_at']->format(DATE_ATOM);
+		}
+
+		return $this->request('POST', '/emails', $params);
 	}
 
 	/**
-	 * Retrieve an email by identifier.
+	 * Send a new email via the EmailIt API.
+	 *
+	 * @deprecated Use sendEmail() instead.
+	 * @param array $params
+	 * @return array
+	 * @throws EmailItException
+	 */
+	public function sendEmailRequest(array $params): array
+	{
+		trigger_error('EmailItClient::sendEmailRequest() is deprecated. Use EmailItClient::sendEmail() instead.', E_USER_DEPRECATED);
+
+		return $this->sendEmail($params);
+	}
+
+	/**
+	 * Retrieve an email by ID.
+	 *
+	 * @param string $emailId
+	 * @return array
+	 * @throws EmailItException
 	 */
 	public function getEmail(string $emailId): array
 	{
@@ -175,19 +303,32 @@ class EmailItClient
 	}
 
 	/**
-	 * Update an existing email (e.g., schedule changes).
+	 * Update a scheduled email by ID.
+	 *
+	 * @param string $emailId
+	 * @param array $params
+	 * @return array
+	 * @throws EmailItException
 	 */
-	public function updateEmail(string $emailId, array $payload): array
+	public function updateEmail(string $emailId, array $params): array
 	{
-		if (empty($payload)) {
-			throw new EmailItException('Update payload for email cannot be empty.');
+		if (empty($params)) {
+			throw new EmailItException('Update payload cannot be empty');
 		}
 
-		return $this->request('PATCH', "/emails/{$emailId}", $payload);
+		if (isset($params['scheduled_at']) && $params['scheduled_at'] instanceof \DateTimeInterface) {
+			$params['scheduled_at'] = $params['scheduled_at']->format(DATE_ATOM);
+		}
+
+		return $this->request('POST', "/emails/{$emailId}", $params);
 	}
 
 	/**
-	 * Cancel a scheduled email.
+	 * Cancel a scheduled email by ID.
+	 *
+	 * @param string $emailId
+	 * @return array
+	 * @throws EmailItException
 	 */
 	public function cancelEmail(string $emailId): array
 	{
@@ -195,64 +336,41 @@ class EmailItClient
 	}
 
 	/**
-	 * Retry a failed email send.
+	 * Retry a failed email by ID.
+	 *
+	 * @param string $emailId
+	 * @return array
+	 * @throws EmailItException
 	 */
 	public function retryEmail(string $emailId): array
 	{
 		return $this->request('POST', "/emails/{$emailId}/retry");
 	}
-
+	
 	/**
-	 * @deprecated Use sendEmail() instead.
+	 * Validate required fields
+	 * 
+	 * @param array $params
+	 * @param array $required
+	 * @throws EmailItException
 	 */
-	public function sendEmailRequest(array $params): array
+	private function validateRequired(array $params, array $required): void
 	{
-		trigger_error(
-			'EmailItClient::sendEmailRequest() is deprecated. Use EmailItClient::sendEmail() instead.',
-			E_USER_DEPRECATED
-		);
-
-		return $this->sendEmail($params);
-	}
-
-	private function buildUrl(string $endpoint, array $query = []): string
-	{
-		$endpoint = '/' . ltrim($endpoint, '/');
-		$url = $this->baseUrl . $endpoint;
-
-		if (!empty($query)) {
-			$queryString = http_build_query($query, '', '&', PHP_QUERY_RFC3986);
-			if ($queryString !== '') {
-				$url .= (strpos($url, '?') === false ? '?' : '&') . $queryString;
-			}
-		}
-
-		return $url;
-	}
-
-	private function validateEmailPayload(array $payload): void
-	{
-		$requiredFields = ['from', 'to', 'subject'];
-
-		foreach ($requiredFields as $field) {
-			if (!isset($payload[$field]) || $payload[$field] === '' || $payload[$field] === []) {
+		foreach ($required as $field) {
+			if (!isset($params[$field]) || empty($params[$field])) {
 				throw new EmailItException("Missing required field: {$field}");
 			}
 		}
-
-		if (!isset($payload['html']) && !isset($payload['text'])) {
-			throw new EmailItException('Either html or text content must be provided');
-		}
 	}
-
-	private function formatHeaders(): array
+	
+	private function formatHeaders(array $overrides = []): array
 	{
+		$headers = array_merge($this->headers, $overrides);
 		$formatted = [];
-
-		foreach ($this->headers as $key => $value) {
-			$formatted[] = "{$key}: {$value}";
+		foreach ($headers as $key => $value) {
+			$formatted[] = "$key: $value";
 		}
-
 		return $formatted;
 	}
+
 }

@@ -4,83 +4,154 @@ namespace EmailIt;
 
 class AudienceManager
 {
-	private EmailItClient $client;
-	
-	public function __construct(EmailItClient $client)
-	{
-		$this->client = $client;
-	}
-	
-	/**
-	 * List all audiences with optional filtering and pagination
-	 * 
-	 * @param int $limit Number of audiences per page (default: 25)
-	 * @param int $page Page number
-	 * @param string|null $nameFilter Filter audiences by name
-	 * @return array
-	 */
-	public function list(int $limit = 25, int $page = 1, ?string $nameFilter = null): array
-	{
-		$params = [
-			'limit' => max(1, $limit),
-			'page' => max(1, $page)
-		];
+    private EmailItClient $client;
 
-		if ($nameFilter) {
-			$params['filter']['name'] = $nameFilter;
-		}
+    public function __construct(EmailItClient $client)
+    {
+        $this->client = $client;
+    }
 
-		return $this->client->request('GET', '/audiences', $params);
-	}
+    /**
+     * List audiences with support for pagination and optional keyword search.
+     */
+    public function list(int $page = 1, int $limit = 25, ?string $search = null): array
+    {
+        $params = [
+            'page' => $page,
+            'limit' => $limit,
+        ];
 
-	/**
-	 * Create a new audience
-	 * 
-	 * @param string $name Name of the audience
-	 * @return array
-	 */
-	public function create(string $name): array
-	{
-		return $this->client->request('POST', '/audiences', [
-			'name' => $name
-		]);
-	}
+        if ($search !== null) {
+            $search = trim($search);
+            if ($search !== '') {
+                $params['search'] = $search;
+            }
+        }
 
-	/**
-	 * Retrieve an audience by ID
-	 * 
-	 * @param string $id Audience ID
-	 * @return array
-	 */
-	public function get(string $id): array
-	{
-		return $this->client->request('GET', "/audiences/{$id}");
-	}
+        return $this->client->request('GET', '/audiences', $params);
+    }
 
-	/**
-	 * Update an audience
-	 * 
-	 * @param string $id Audience ID
-	 * @param string $name New name for the audience
-	 * @return array
-	 */
-	public function update(string $id, string $name): array
-	{
-		return $this->client->request('PUT', "/audiences/{$id}", [
-			'name' => $name
-		]);
-	}
+    /**
+     * Create a new audience.
+     *
+     * @throws EmailItException
+     */
+    public function create(string $name, array $attributes = []): array
+    {
+        $name = trim($name);
 
-	/**
-	 * Delete an audience
-	 * 
-	 * @param string $id Audience ID
-	 * @return bool
-	 */
-	public function delete(string $id): bool
-	{
-		$this->client->request('DELETE', "/audiences/{$id}");
-		return true;
-	}
+        if ($name === '') {
+            throw new EmailItException('Audience name cannot be empty');
+        }
 
+        $payload = ['name' => $name];
+        $payload = array_merge($payload, $this->filterAudienceAttributes($attributes));
+
+        return $this->client->request('POST', '/audiences', $payload);
+    }
+
+    /**
+     * Retrieve an audience by identifier.
+     */
+    public function get(string $audienceId): array
+    {
+        return $this->client->request('GET', "/audiences/{$audienceId}");
+    }
+
+    /**
+     * Update an existing audience.
+     *
+     * @throws EmailItException
+     */
+    public function update(string $audienceId, array $attributes): array
+    {
+        $payload = $this->filterAudienceAttributes($attributes);
+
+        if (empty($payload)) {
+            throw new EmailItException('Audience update payload cannot be empty');
+        }
+
+        return $this->client->request('POST', "/audiences/{$audienceId}", $payload);
+    }
+
+    /**
+     * Delete an audience by identifier.
+     */
+    public function delete(string $audienceId): bool
+    {
+        $this->client->request('DELETE', "/audiences/{$audienceId}");
+
+        return true;
+    }
+
+    /**
+     * Access subscriber operations for a given audience.
+     */
+    public function subscribers(string $audienceId): AudienceSubscriberManager
+    {
+        return new AudienceSubscriberManager($this->client, $audienceId);
+    }
+
+    /**
+     * @deprecated Use subscribers($audienceId)->add(...) instead.
+     */
+    public function subscribe(
+        string $audienceId,
+        string $email,
+        string $firstName,
+        string $lastName,
+        array $customFields = []
+    ): array {
+        trigger_error('AudienceManager::subscribe() is deprecated. Use AudienceManager::subscribers($audienceId)->add(...) instead.', E_USER_DEPRECATED);
+
+        $attributes = [];
+
+        $firstName = trim($firstName);
+        if ($firstName !== '') {
+            $attributes['first_name'] = $firstName;
+        }
+
+        $lastName = trim($lastName);
+        if ($lastName !== '') {
+            $attributes['last_name'] = $lastName;
+        }
+
+        if (!empty($customFields)) {
+            $attributes['custom_fields'] = $customFields;
+        }
+
+        return $this->subscribers($audienceId)->add($email, $attributes);
+    }
+
+    private function filterAudienceAttributes(array $attributes): array
+    {
+        $payload = [];
+
+        foreach ($attributes as $key => $value) {
+            switch ($key) {
+                case 'name':
+                case 'description':
+                    $value = trim((string) $value);
+                    if ($value === '') {
+                        continue 2;
+                    }
+                    $payload[$key] = $value;
+                    break;
+                case 'tags':
+                    if (is_array($value)) {
+                        $tags = array_values(array_unique(array_filter($value, static function ($tag) {
+                            return is_string($tag) && trim($tag) !== '';
+                        })));
+                        if (!empty($tags)) {
+                            $payload[$key] = $tags;
+                        }
+                    }
+                    break;
+                default:
+                    $payload[$key] = $value;
+            }
+        }
+
+        return $payload;
+    }
 }

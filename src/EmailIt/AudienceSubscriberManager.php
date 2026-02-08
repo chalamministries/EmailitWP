@@ -4,134 +4,142 @@ namespace EmailIt;
 
 class AudienceSubscriberManager
 {
-	private EmailItClient $client;
-	private string $audienceId;
+    private EmailItClient $client;
+    private string $audienceId;
 
-	public function __construct(EmailItClient $client, string $audienceId)
-	{
-		$this->client = $client;
-		$this->audienceId = $audienceId;
-	}
+    public function __construct(EmailItClient $client, string $audienceId)
+    {
+        $this->client = $client;
+        $this->audienceId = $audienceId;
+    }
 
-	/**
-	 * List subscribers for the configured audience.
-	 *
-	 * @param int $limit Number of subscribers per page (default: 25)
-	 * @param int $page Page number (default: 1)
-	 * @param array $filters Optional filters (e.g., ['email' => 'user@example.com'])
-	 * @return array
-	 */
-	public function list(int $limit = 25, int $page = 1, array $filters = []): array
-	{
-		$params = [
-			'limit' => max(1, $limit),
-			'page' => max(1, $page),
-		];
+    /**
+     * Retrieve subscribers for the current audience.
+     */
+    public function list(int $page = 1, int $limit = 25, ?bool $subscribed = null): array
+    {
+        $params = [
+            'page' => $page,
+            'limit' => $limit,
+        ];
 
-		if (!empty($filters)) {
-			foreach ($filters as $key => $value) {
-				if ($value === null || $value === '') {
-					continue;
-				}
-				$params['filter'][$key] = $value;
-			}
-		}
+        if ($subscribed !== null) {
+            $params['subscribed'] = $subscribed;
+        }
 
-		return $this->client->request('GET', $this->endpoint(), $params);
-	}
+        return $this->client->request('GET', $this->endpoint(), $params);
+    }
 
-	/**
-	 * Add a new subscriber to the audience.
-	 *
-	 * @param array $subscriber Subscriber payload (must include 'email').
-	 * @return array
-	 * @throws EmailItException
-	 */
-	public function add(array $subscriber): array
-	{
-		if (empty($subscriber['email']) || !is_string($subscriber['email'])) {
-			throw new EmailItException('Subscriber email is required.');
-		}
+    /**
+     * Add a new subscriber to the audience.
+     *
+     * @throws EmailItException
+     */
+    public function add(string $email, array $attributes = []): array
+    {
+        $payload = $this->buildPayload($attributes, $email);
 
-		$subscriber['email'] = trim($subscriber['email']);
+        if (!isset($payload['email'])) {
+            throw new EmailItException('Subscriber email cannot be empty');
+        }
 
-		if ($subscriber['email'] === '') {
-			throw new EmailItException('Subscriber email is required.');
-		}
+        return $this->client->request('POST', $this->endpoint(), $payload);
+    }
 
-		if (isset($subscriber['custom_fields']) && !is_array($subscriber['custom_fields'])) {
-			throw new EmailItException('Subscriber custom_fields must be an array.');
-		}
+    /**
+     * Retrieve an individual subscriber.
+     */
+    public function get(string $subscriberId): array
+    {
+        return $this->client->request('GET', $this->endpoint($subscriberId));
+    }
 
-		return $this->client->request('POST', $this->endpoint(), $subscriber);
-	}
+    /**
+     * Update an existing subscriber.
+     *
+     * @throws EmailItException
+     */
+    public function update(string $subscriberId, array $attributes): array
+    {
+        $payload = $this->buildPayload($attributes);
 
-	/**
-	 * Retrieve a subscriber by ID.
-	 *
-	 * @param string $subscriberId Subscriber identifier
-	 * @return array
-	 */
-	public function get(string $subscriberId): array
-	{
-		return $this->client->request('GET', $this->endpoint("/{$subscriberId}"));
-	}
+        if (empty($payload)) {
+            throw new EmailItException('Subscriber update payload cannot be empty');
+        }
 
-	/**
-	 * Update an existing subscriber.
-	 *
-	 * @param string $subscriberId Subscriber identifier
-	 * @param array $payload Fields to update
-	 * @return array
-	 * @throws EmailItException
-	 */
-	public function update(string $subscriberId, array $payload): array
-	{
-		if (empty($payload)) {
-			throw new EmailItException('Subscriber update payload cannot be empty.');
-		}
+        return $this->client->request('POST', $this->endpoint($subscriberId), $payload);
+    }
 
-		if (isset($payload['email'])) {
-			$payload['email'] = trim((string) $payload['email']);
-			if ($payload['email'] === '') {
-				unset($payload['email']);
-			}
-		}
+    /**
+     * Remove a subscriber from the audience.
+     */
+    public function delete(string $subscriberId): bool
+    {
+        $this->client->request('DELETE', $this->endpoint($subscriberId));
 
-		if (isset($payload['custom_fields']) && !is_array($payload['custom_fields'])) {
-			throw new EmailItException('Subscriber custom_fields must be an array.');
-		}
+        return true;
+    }
 
-		return $this->client->request('PATCH', $this->endpoint("/{$subscriberId}"), $payload);
-	}
+    /**
+     * Convenience helper to mark a subscriber as unsubscribed without deleting records.
+     */
+    public function unsubscribe(string $subscriberId): array
+    {
+        return $this->update($subscriberId, ['subscribed' => false]);
+    }
 
-	/**
-	 * Delete a subscriber from the audience.
-	 *
-	 * @param string $subscriberId Subscriber identifier
-	 * @return bool
-	 */
-	public function delete(string $subscriberId): bool
-	{
-		$this->client->request('DELETE', $this->endpoint("/{$subscriberId}"));
-		return true;
-	}
+    private function endpoint(string $suffix = ''): string
+    {
+        $base = "/audiences/{$this->audienceId}/subscribers";
 
-	/**
-	 * Unsubscribe a subscriber without deleting their profile.
-	 *
-	 * @param string $subscriberId Subscriber identifier
-	 * @param array $payload Optional payload (e.g., ['reason' => 'User requested'])
-	 * @return array
-	 */
-	public function unsubscribe(string $subscriberId, array $payload = []): array
-	{
-		return $this->client->request('POST', $this->endpoint("/{$subscriberId}/unsubscribe"), $payload);
-	}
+        if ($suffix !== '') {
+            $base .= '/' . $suffix;
+        }
 
-	private function endpoint(string $suffix = ''): string
-	{
-		$base = "/audiences/{$this->audienceId}/subscribers";
-		return $suffix ? $base . $suffix : $base;
-	}
+        return $base;
+    }
+
+    private function buildPayload(array $attributes, ?string $email = null): array
+    {
+        $payload = [];
+
+        if ($email !== null) {
+            $email = trim($email);
+            if ($email !== '') {
+                $payload['email'] = $email;
+            }
+        }
+
+        foreach ($attributes as $key => $value) {
+            switch ($key) {
+                case 'email':
+                    $value = trim((string) $value);
+                    if ($value === '') {
+                        continue 2;
+                    }
+                    $payload['email'] = $value;
+                    break;
+                case 'first_name':
+                case 'last_name':
+                    $value = trim((string) $value);
+                    if ($value === '') {
+                        continue 2;
+                    }
+                    $payload[$key] = $value;
+                    break;
+                case 'custom_fields':
+                    if (is_array($value) && !empty($value)) {
+                        $payload[$key] = $value;
+                    }
+                    break;
+                case 'subscribed':
+                    $payload[$key] = (bool) $value;
+                    break;
+                default:
+                    $payload[$key] = $value;
+            }
+        }
+
+        return $payload;
+    }
 }

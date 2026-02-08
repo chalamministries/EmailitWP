@@ -2,58 +2,28 @@
 
 namespace EmailIt;
 
+/**
+ * @deprecated Use ApiKeyManager instead.
+ */
 class CredentialManager extends ApiKeyManager
 {
-	public function __construct(EmailItClient $client)
+	/**
+	 * @deprecated Use ApiKeyManager::create() instead.
+	 */
+	public function create(string $name, string $scope, array $attributes = []): array
 	{
-		trigger_error(
-			'CredentialManager is deprecated. Use EmailIt\\ApiKeyManager instead.',
-			E_USER_DEPRECATED
-		);
+		trigger_error('CredentialManager::create() is deprecated. Use ApiKeyManager::create() instead.', E_USER_DEPRECATED);
 
-		parent::__construct($client);
+		return parent::create($name, $scope, $attributes);
 	}
 
-	public function list(
-		int $perPage = 25,
-		int $page = 1,
-		?string $nameFilter = null,
-		?string $typeFilter = null
-	): array {
-		$filters = [];
-
-		if ($nameFilter) {
-			$filters['name'] = $nameFilter;
-		}
-
-		if ($typeFilter) {
-			$filters['type'] = $typeFilter;
-		}
-
-		return parent::list($perPage, $page, $filters);
-	}
-
-	public function create(string $name, string $type): array
-	{
-		if (!in_array($type, ['smtp', 'api'], true)) {
-			throw new EmailItException('Invalid credential type. Must be either "smtp" or "api"');
-		}
-
-		return parent::create($name, ['type' => $type]);
-	}
-
-	public function get(string $id): array
-	{
-		return parent::get($id);
-	}
-
+	/**
+	 * @deprecated Use ApiKeyManager::update() instead.
+	 */
 	public function update(string $id, string $name): array
 	{
-		return parent::update($id, ['name' => $name]);
-	}
+		trigger_error('CredentialManager::update() is deprecated. Use ApiKeyManager::update() instead.', E_USER_DEPRECATED);
 
-	public function delete(string $id): bool
-	{
-		return parent::delete($id);
+		return parent::update($id, ['name' => $name]);
 	}
 }
