@@ -1,5 +1,9 @@
 # EmailIt Mailer for WordPress
 
+> **Important:** Please download the latest release from the GitHub **Releases** page. The repository “Download ZIP” option may not include the most up-to-date build.
+
+> **Important:** For faster email delivery, add a system cron job to trigger WP-Cron. Otherwise, emails may wait until a visitor loads your site to run scheduled jobs.
+
 A WordPress plugin that seamlessly integrates with the EmailIt SDK to handle all your WordPress email needs through the EmailIt API.
 
 ## Description
