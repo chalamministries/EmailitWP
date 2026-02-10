@@ -180,10 +180,20 @@ class EmailItClient
 		}
 	
 		$decodedResponse = json_decode($response, true);
-		
+
 		if ($statusCode >= 400) {
+			$errorMessage = 'Unknown error';
+			if (is_array($decodedResponse)) {
+				$errorMessage = $decodedResponse['message']
+					?? $decodedResponse['error']
+					?? $decodedResponse['errors'][0]['message']
+					?? json_encode($decodedResponse);
+			} elseif (is_string($response) && $response !== '') {
+				$errorMessage = $response;
+			}
+
 			throw new EmailItException(
-				'API Error: ' . ($decodedResponse['message'] ?? 'Unknown error'),
+				"API Error (HTTP $statusCode): $errorMessage",
 				$statusCode
 			);
 		}

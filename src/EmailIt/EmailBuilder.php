@@ -294,15 +294,10 @@ class EmailBuilder
 
     private function preparePayload(array $payload): array
     {
+        // Remove empty recipient fields (already normalized by to/cc/bcc methods)
         foreach (['to', 'cc', 'bcc'] as $field) {
-            if (array_key_exists($field, $payload)) {
-                $normalizedRecipients = $this->normalizeRecipients($payload[$field]);
-
-                if (!empty($normalizedRecipients)) {
-                    $payload[$field] = $normalizedRecipients;
-                } else {
-                    unset($payload[$field]);
-                }
+            if (array_key_exists($field, $payload) && empty($payload[$field])) {
+                unset($payload[$field]);
             }
         }
 
@@ -340,75 +335,53 @@ class EmailBuilder
 
     private function normalizeRecipients($recipients, $existing = []): array
     {
-        $merged = array_merge(
-            $this->recipientList($existing),
-            $this->recipientList($recipients)
-        );
+        $result = [];
 
-        $normalized = [];
+        // Flatten existing into result
+        $this->collectRecipients($existing, $result);
 
-        foreach ($merged as $recipient) {
-            if (is_array($recipient)) {
-                if (!$this->containsArray($normalized, $recipient)) {
-                    $normalized[] = $recipient;
-                }
-                continue;
-            }
+        // Flatten new recipients into result
+        $this->collectRecipients($recipients, $result);
 
-            if (!is_string($recipient)) {
-                continue;
-            }
-
-            $trimmed = trim($recipient);
-
-            if ($trimmed === '') {
-                continue;
-            }
-
-            if (!in_array($trimmed, $normalized, true)) {
-                $normalized[] = $trimmed;
-            }
-        }
-
-        return $normalized;
+        return array_values($result);
     }
 
-    private function recipientList($value): array
+    private function collectRecipients($value, array &$result): void
     {
-        if ($value === null) {
-            return [];
+        if ($value === null || $value === '' || $value === []) {
+            return;
+        }
+
+        if (is_string($value)) {
+            $trimmed = trim($value);
+            if ($trimmed !== '' && !in_array($trimmed, $result, true)) {
+                $result[] = $trimmed;
+            }
+            return;
         }
 
         if (is_array($value)) {
-            if ($this->isAssoc($value)) {
-                return [$value];
+            // Check if associative array (structured recipient like ['email' => '...', 'name' => '...'])
+            if ($this->isAssoc($value) && !empty($value)) {
+                $key = json_encode($value);
+                if (!isset($result[$key])) {
+                    $result[$key] = $value;
+                }
+                return;
             }
 
-            return array_values($value);
-        }
-
-        $value = trim((string) $value);
-
-        if ($value === '') {
-            return [];
-        }
-
-        return [$value];
-    }
-
-    private function containsArray(array $haystack, array $needle): bool
-    {
-        foreach ($haystack as $item) {
-            if (is_array($item) && $item == $needle) {
-                return true;
+            // Sequential array - process each element
+            foreach ($value as $item) {
+                $this->collectRecipients($item, $result);
             }
         }
-
-        return false;
     }
 
     private function isAssoc(array $array): bool
     {
+        if (empty($array)) {
+            return false;
+        }
         return array_keys($array) !== range(0, count($array) - 1);
     }
 }

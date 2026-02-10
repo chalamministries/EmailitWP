@@ -3,7 +3,7 @@
 Plugin Name: EmailIt Mailer for WordPress
 Plugin URI: https://github.com/chalamministries/EmailitWP
 Description: Overrides WordPress default mail function to use EmailIt SDK
-Version: 3.2.3
+Version: 3.2.4
 Author: Steven Gauerke
 License: GPL2
 */
@@ -1198,33 +1198,25 @@ $domains = $emailit->get_sending_domains();
             return;
         }
 
-        // First recipient goes in TO, rest go in BCC for a single API call
-        $to_recipient = array_shift($batch);
-        $bcc_recipients = $batch; // Remaining recipients
+        // Send individual email to each recipient in the batch
+        foreach ($batch as $recipient) {
+            $email_args = [
+                'to' => $recipient,
+                'subject' => $args['subject'],
+                'message' => $args['message'],
+                'headers' => $args['headers'],
+                'text_message' => isset($args['text_message']) ? $args['text_message'] : null
+            ];
 
-        $email_args = [
-            'to' => $to_recipient,
-            'subject' => $args['subject'],
-            'message' => $args['message'],
-            'headers' => $args['headers'],
-            'text_message' => isset($args['text_message']) ? $args['text_message'] : null
-        ];
+            // Log each email individually
+            $log_id = $this->logger->log_email($email_args);
 
-        // Add BCC recipients if there are any
-        if (!empty($bcc_recipients)) {
-            $email_args['bcc'] = $bcc_recipients;
+            if ($log_id) {
+                $email_args['log_id'] = $log_id;
+            }
+
+            $this->send_mail_async($email_args);
         }
-
-        // Log the batch email
-        $log_id = $this->logger->log_email($email_args);
-
-        // Add log ID to args for tracking
-        if ($log_id) {
-            $email_args['log_id'] = $log_id;
-        }
-
-        // Send the email (single API call)
-        $this->send_mail_async($email_args);
 
         wp_clear_scheduled_hook('emailit_process_email_batch', [$args]);
     }
